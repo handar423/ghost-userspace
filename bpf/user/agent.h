@@ -26,19 +26,7 @@
 extern "C" {
 #endif
 
-// From include/uapi/linux/bpf.h for the ghost kernel.
-
-struct bpf_ghost_sched {};
-
-enum {
-  BPF_PROG_TYPE_GHOST_SCHED = 35,
-
-  BPF_GHOST_SCHED_SKIP_TICK = 50,
-  BPF_GHOST_SCHED_PNT,
-  BPF_GHOST_SCHED_MAX_ATTACH_TYPE,  // __MAX_BPF_ATTACH_TYPE
-};
-
-// end include/uapi/linux/bpf.h
+#define BPF_GHOST_MAX_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
 
 // Generic BPF helpers
 
