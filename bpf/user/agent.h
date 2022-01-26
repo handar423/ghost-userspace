@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-#define BPF_GHOST_MAX_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
+#define BPF_GHOST_SCHED_MAX_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
 
 // Generic BPF helpers
 
