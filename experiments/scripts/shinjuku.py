@@ -39,9 +39,10 @@ def RunCfs():
   """Runs the CFS (Linux Completely Fair Scheduler) experiment."""
   e: Experiment = Experiment()
   # Run throughputs 10000, 20000, 30000, and 40000.
-  e.throughputs = list(i for i in range(10000, 50000, 10000))
+  e.throughputs = list(i for i in range(10000, 60000, 500))
+  # e.throughputs = list(i for i in range(10000, 50000, 10000))
   # Toward the end, run throughputs 50000, 51000, 52000, ..., 80000.
-  e.throughputs.extend(list(i for i in range(50000, 81000, 1000)))
+  # e.throughputs.extend(list(i for i in range(50000, 81000, 1000)))
   e.rocksdb = GetRocksDBOptions(Scheduler.CFS, _NUM_CPUS, _NUM_CFS_WORKERS)
   e.rocksdb.range_query_ratio = 0.005
   e.antagonist = None
@@ -54,9 +55,9 @@ def RunGhost():
   """Runs the ghOSt experiment."""
   e: Experiment = Experiment()
   # Run throughputs 1000, 20000, 30000, ..., 130000.
-  e.throughputs = list(i for i in range(10000, 140000, 10000))
+  e.throughputs = list(i for i in range(10000, 60000, 500))
   # Toward the end, run throughputs 140000, 141000, 142000, ..., 150000.
-  e.throughputs.extend(list(i for i in range(140000, 151000, 1000)))
+  # e.throughputs.extend(list(i for i in range(140000, 151000, 1000)))
   e.rocksdb = GetRocksDBOptions(Scheduler.GHOST, _NUM_CPUS, _NUM_GHOST_WORKERS)
   e.rocksdb.range_query_ratio = 0.005
   e.antagonist = None

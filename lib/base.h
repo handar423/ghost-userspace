@@ -133,6 +133,7 @@ int64_t GetGtid();
 // int64_t some_gtid = 104'326;
 // Gtid gtid(some_gtid);
 // pid_t some_tid = gtid.tid();
+// 这里的查找组ID和查找ghOSt ID都是kernel modified
 class Gtid {
  public:
   Gtid() : gtid_raw_(-1) {}  // Uninitialized.

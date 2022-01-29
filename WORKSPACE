@@ -97,3 +97,8 @@ pip_install(
    name = "my_deps",
    requirements = "//:requirements.txt",
 )
+
+local_repository(
+name = "rules_custom_skip_downloads",
+path = "/root/downloads/bazel/unzipdir",
+)

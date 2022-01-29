@@ -43,6 +43,7 @@ static inline int verbose() {
 
 static inline void set_verbose(int32_t v) { absl::SetFlag(&FLAGS_verbose, v); }
 
+// 每次执行只有一个实例
 class StatusWordTable {
  public:
   // Create or attach to a preexisting status word region in the enclave.

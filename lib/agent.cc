@@ -48,6 +48,7 @@ void Agent::ThreadBody() {
   CHECK_EQ(Ghost::SchedSetAffinity(Gtid::Current(),
                                    MachineTopology()->ToCpuList({cpu_})),
            0);
+  // 不明白这一行在干嘛？
   enclave_->WaitForOldAgent();
 
   // setsched may fail with EBUSY, which is when there is an old agent that has

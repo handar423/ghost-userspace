@@ -381,6 +381,7 @@ class AgentProcess {
     // We could make 'ready' and 'kill' be Rpcs too, but it's simpler to have a
     // thread for the RPCs for our derived class FullAgents and let this thread
     // handle ready/kill for the AgentProcess.
+    // full agent的工作线程
     auto rpc_handler = std::thread([this]() {
       for (;;) {
         sb_->rpc_pending_.WaitForNotification();

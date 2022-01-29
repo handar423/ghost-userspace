@@ -64,6 +64,7 @@ class AgentConfig {
   virtual ~AgentConfig() {}
 };
 
+// 每次执行（理解为一个用户层和Agent的交互系统，自己和ghOSt交互）
 class Enclave {
  public:
   Enclave(const AgentConfig config);
