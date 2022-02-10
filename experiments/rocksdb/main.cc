@@ -117,11 +117,6 @@ ghost_test::Orchestrator::Options GetOptions() {
   options.cfs_dispatcher_cpu = absl::GetFlag(FLAGS_cfs_dispatcher_cpu);
   options.num_workers = absl::GetFlag(FLAGS_num_workers);
 
-  const std::vector<std::string> worker_cpus = absl::GetFlag(FLAGS_worker_cpus);
-  for (const std::string& cpu : worker_cpus) {
-    options.worker_cpus.push_back(std::stoi(cpu));
-  }
-
   std::string cfs_wait_type = absl::GetFlag(FLAGS_cfs_wait_type);
   CHECK(cfs_wait_type == "spin" || cfs_wait_type == "futex");
   options.cfs_wait_type =
@@ -151,6 +146,14 @@ ghost_test::Orchestrator::Options GetOptions() {
   options.scheduler = (scheduler == "cfs")
                           ? ghost::GhostThread::KernelScheduler::kCfs
                           : ghost::GhostThread::KernelScheduler::kGhost;
+
+  // disable worker_cpus for ghOSt
+  if(scheduler == "cfs"){
+    const std::vector<std::string> worker_cpus = absl::GetFlag(FLAGS_worker_cpus);
+    for (const std::string& cpu : worker_cpus) {
+      options.worker_cpus.push_back(std::stoi(cpu));
+    }
+  }
 
   options.ghost_qos = absl::GetFlag(FLAGS_ghost_qos);
 

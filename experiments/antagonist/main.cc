@@ -66,10 +66,6 @@ ghost_test::Orchestrator::Options GetOptions() {
   CHECK_LE(options.work_share, 1.0);
   options.num_threads = absl::GetFlag(FLAGS_num_threads);
 
-  for (const std::string& cpu : absl::GetFlag(FLAGS_cpus)) {
-    options.cpus.push_back(std::stoi(cpu));
-  }
-
   options.experiment_duration = absl::GetFlag(FLAGS_experiment_duration);
   CHECK_GE(options.experiment_duration, absl::ZeroDuration());
 
@@ -78,6 +74,13 @@ ghost_test::Orchestrator::Options GetOptions() {
   options.scheduler = (scheduler == "cfs")
                           ? ghost::GhostThread::KernelScheduler::kCfs
                           : ghost::GhostThread::KernelScheduler::kGhost;
+
+  // disable cpus for ghOSt
+  if(scheduler == "cfs"){
+    for (const std::string& cpu : absl::GetFlag(FLAGS_cpus)) {
+      options.cpus.push_back(std::stoi(cpu));
+    }
+  }
 
   options.ghost_qos = absl::GetFlag(FLAGS_ghost_qos);
 

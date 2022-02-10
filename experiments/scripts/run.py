@@ -222,11 +222,11 @@ def RocksDBArgs(experiment: Experiment, throughput: int, set_nice: bool):
   Returns:
     A list of the command line arguments.
   """
-  prefix_args = []
+  prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-6q5bh", "--"]
   if set_nice:
     # This is an experiment that runs the Antagonist on CFS (Linux Completely
     # Fair Scheduler).
-    prefix_args = GetNiceArgs(-20)
+    prefix_args = prefix_args + GetNiceArgs(-20);
 
   return prefix_args + [experiment.binaries.rocksdb] + DataClassToArgs(
       experiment.rocksdb) + DictToArgs({"throughput": str(throughput)})
@@ -245,9 +245,9 @@ def AntagonistArgs(experiment: Experiment, set_nice: bool):
   if not experiment.antagonist:
     raise ValueError("The Antagonist has not been configured.")
 
-  prefix_args = []
+  prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-tjlch", "--"]
   if set_nice:
-    prefix_args = GetNiceArgs(19)
+    prefix_args = prefix_args + GetNiceArgs(19)
 
   return prefix_args + [experiment.binaries.antagonist] + DataClassToArgs(
       experiment.antagonist)
