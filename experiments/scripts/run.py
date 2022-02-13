@@ -22,6 +22,7 @@ import json
 import os
 import signal
 import subprocess
+from time import sleep
 from typing import List
 from typing import Optional
 from typing import TextIO
@@ -228,7 +229,7 @@ def RocksDBArgs(experiment: Experiment, throughput: int, set_nice: bool):
     # Fair Scheduler).
     prefix_args = prefix_args + GetNiceArgs(-20);
 
-  return prefix_args + [experiment.binaries.rocksdb] + DataClassToArgs(
+  return prefix_args + ["/root/temp-bin/rocksdb"] + DataClassToArgs(
       experiment.rocksdb) + DictToArgs({"throughput": str(throughput)})
 
 
@@ -249,7 +250,7 @@ def AntagonistArgs(experiment: Experiment, set_nice: bool):
   if set_nice:
     prefix_args = prefix_args + GetNiceArgs(19)
 
-  return prefix_args + [experiment.binaries.antagonist] + DataClassToArgs(
+  return prefix_args + ["/root/temp-bin/antagonist"] + DataClassToArgs(
       experiment.antagonist)
 
 
