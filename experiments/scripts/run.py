@@ -212,7 +212,7 @@ def DumpOptions(experiment: Experiment, outputs: OutputFiles):
     output.flush()
 
 
-def RocksDBArgs(experiment: Experiment, throughput: int, set_nice: bool):
+def RocksDBArgs(experiment: Experiment, throughput: int, set_nice: bool, env='host'):
   """Returns the RocksDB command line arguments for this experiment.
 
   Args:
@@ -223,17 +223,21 @@ def RocksDBArgs(experiment: Experiment, throughput: int, set_nice: bool):
   Returns:
     A list of the command line arguments.
   """
-  prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-6q5bh", "--"]
+  prefix_args = []
+  path = [experiment.binaries.rocksdb]
+  if env == 'kubelet':
+    prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-6q5bh", "--"]
+    path = ["/root/temp-bin/rocksdb"]
   if set_nice:
     # This is an experiment that runs the Antagonist on CFS (Linux Completely
     # Fair Scheduler).
     prefix_args = prefix_args + GetNiceArgs(-20);
 
-  return prefix_args + ["/root/temp-bin/rocksdb"] + DataClassToArgs(
+  return prefix_args + path + DataClassToArgs(
       experiment.rocksdb) + DictToArgs({"throughput": str(throughput)})
 
 
-def AntagonistArgs(experiment: Experiment, set_nice: bool):
+def AntagonistArgs(experiment: Experiment, set_nice: bool, env='host'):
   """Returns the Antagonist command line arguments for this experiment.
 
   Args:
@@ -246,11 +250,15 @@ def AntagonistArgs(experiment: Experiment, set_nice: bool):
   if not experiment.antagonist:
     raise ValueError("The Antagonist has not been configured.")
 
-  prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-tjlch", "--"]
+  prefix_args = []
+  path = [experiment.binaries.antagonist]
+  if env == 'kubelet':
+    prefix_args = ["kubectl", "exec", "alpine-6d9599cb95-tjlch", "--"]
+    path = ["/root/temp-bin/antagonist"]
   if set_nice:
     prefix_args = prefix_args + GetNiceArgs(19)
 
-  return prefix_args + ["/root/temp-bin/antagonist"] + DataClassToArgs(
+  return prefix_args + path + DataClassToArgs(
       experiment.antagonist)
 
 
@@ -310,7 +318,7 @@ def WaitForLine(stream: TextIO, expected_line: str):
       return
 
 
-def StartApps(experiment: Experiment, throughput: int):
+def StartApps(experiment: Experiment, throughput: int, env='host'):
   """Starts the applications for the experiment.
 
   Args:
@@ -330,13 +338,13 @@ def StartApps(experiment: Experiment, throughput: int):
     WaitForLine(ghost.stdout, "Initialization complete, ghOSt active.")
 
   # Start RocksDB.
-  rocksdb = StartApp(RocksDBArgs(experiment, throughput, set_nice), "rocksdb")
+  rocksdb = StartApp(RocksDBArgs(experiment, throughput, set_nice, env), "rocksdb")
   WaitForLine(rocksdb.stdout, "Initialization complete.")
 
   # Start the Antagonist (if applicable).
   antagonist = None
   if experiment.antagonist:
-    antagonist = StartApp(AntagonistArgs(experiment, set_nice), "rocksdb")
+    antagonist = StartApp(AntagonistArgs(experiment, set_nice, env), "rocksdb")
 
   return AppHandles(rocksdb, antagonist, ghost)
 
@@ -483,7 +491,7 @@ def HandleOutput(handles: AppHandles, outputs: OutputFiles, throughput: int):
 
 
 def RunExperiment(experiment: Experiment, outputs: OutputFiles,
-                  throughput: int):
+                  throughput: int, env='host'):
   """Runs the experiment and writes the results to the output files.
 
   Args:
@@ -492,12 +500,12 @@ def RunExperiment(experiment: Experiment, outputs: OutputFiles,
     throughput: The RocksDB throughput to generate in this experiment.
   """
   print(f"Running experiment for throughput = {throughput} req/s:")
-  handles = StartApps(experiment, throughput)
+  handles = StartApps(experiment, throughput, env)
   WaitForApps(handles)
   HandleOutput(handles, outputs, throughput)
 
 
-def RunAllExperiments(experiment: Experiment, outputs: OutputFiles):
+def RunAllExperiments(experiment: Experiment, outputs: OutputFiles, env='host'):
   """Runs all experiments and writes the results to the output files.
 
   There is one experiment per throughput in `experiment.throughputs`.
@@ -507,10 +515,10 @@ def RunAllExperiments(experiment: Experiment, outputs: OutputFiles):
     outputs: The output files.
   """
   for throughput in experiment.throughputs:
-    RunExperiment(experiment, outputs, throughput)
+    RunExperiment(experiment, outputs, throughput, env)
 
 
-def Run(experiment: Experiment):
+def Run(experiment: Experiment, env='host'):
   """Run the experiment.
 
   Args:
@@ -528,5 +536,5 @@ def Run(experiment: Experiment):
   print(f"Output Directory: {experiment.output_prefix}")
   outputs = OpenOutputFiles(experiment)
   DumpOptions(experiment, outputs)
-  RunAllExperiments(experiment, outputs)
+  RunAllExperiments(experiment, outputs, env)
   CloseOutputFiles(outputs)

@@ -37,7 +37,7 @@ _NUM_GHOST_WORKERS = 200
 _NUM_ANTAGONIST_CPUS = _NUM_CPUS - 1
 
 
-def RunCfs():
+def RunCfs(env):
   """Runs the CFS (Linux Completely Fair Scheduler) experiment."""
   e: Experiment = Experiment()
   # Run throughputs 10000, 20000, 30000, and 40000.
@@ -46,14 +46,15 @@ def RunCfs():
   e.throughputs.extend(list(i for i in range(50000, 81000, 1000)))
   e.rocksdb = GetRocksDBOptions(Scheduler.CFS, _NUM_CPUS, _NUM_CFS_WORKERS)
   e.rocksdb.range_query_ratio = 0.005
+  e.rocksdb.get_exponential_mean = '1us'
   e.rocksdb.cfs_wait_type = CfsWaitType.FUTEX
   e.antagonist = GetAntagonistOptions(Scheduler.CFS, _NUM_ANTAGONIST_CPUS)
   e.ghost = None
 
-  Run(e)
+  Run(e, env)
 
 
-def RunGhost():
+def RunGhost(env):
   """Runs the ghOSt experiment."""
   e: Experiment = Experiment()
   # Run throughputs 1000, 20000, 30000, ..., 130000.
@@ -63,34 +64,36 @@ def RunGhost():
   e.rocksdb = GetRocksDBOptions(Scheduler.GHOST, _NUM_CPUS, _NUM_GHOST_WORKERS)
   e.rocksdb.range_query_ratio = 0.005
   e.rocksdb.ghost_qos = 2
+  e.rocksdb.get_exponential_mean = '1us'
   e.antagonist = GetAntagonistOptions(Scheduler.GHOST, _NUM_ANTAGONIST_CPUS)
   e.antagonist.ghost_qos = 1
   e.ghost = GetGhostOptions(_NUM_CPUS)
   e.ghost.preemption_time_slice = '30us'
 
-  Run(e)
+  Run(e, env)
 
 
 def main(argv: Sequence[str]):
-  if len(argv) > 3:
+  if len(argv) > 4:
     raise app.UsageError('Too many command-line arguments.')
-  elif len(argv) == 1:
+  elif len(argv) < 3:
     raise app.UsageError(
-        'No experiment specified. Pass `cfs` and/or `ghost` as arguments.')
+        'No experiment specified. Pass `cfs` and/or `ghost` as arguments, and `kubelet`/`Host` as env args.')
 
   # First check that all of the command line arguments are valid.
-  if not CheckSchedulers(argv[1:]):
+  if not CheckSchedulers([argv[1]]):
     raise ValueError('Invalid scheduler specified.')
 
-  # Run the experiments.
-  for i in range(1, len(argv)):
-    scheduler = Scheduler(argv[i])
-    if scheduler == Scheduler.CFS:
-      RunCfs()
-    else:
-      if scheduler != Scheduler.GHOST:
-        raise ValueError(f'Unknown scheduler {scheduler}.')
-      RunGhost()
+  if argv[2] != 'kubelet' and argv[2] != 'host':
+    raise ValueError('Invalid env specified.')
+
+  scheduler = Scheduler(argv[1])
+  if scheduler == Scheduler.CFS:
+    RunCfs(argv[2])
+  else:
+    if scheduler != Scheduler.GHOST:
+      raise ValueError(f'Unknown scheduler {scheduler}.')
+    RunGhost(argv[2])
 
 
 if __name__ == '__main__':
