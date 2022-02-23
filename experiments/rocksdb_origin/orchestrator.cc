@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "experiments/rocksdb/orchestrator.h"
-
+#include "lib/topology.h"
+#include "experiments/rocksdb_origin/orchestrator.h"
+#include "absl/functional/bind_front.h"
 #include <map>
+#include <time.h>
 
 namespace ghost_test {
 
@@ -49,11 +51,6 @@ std::ostream& operator<<(std::ostream& os,
     }
   }
 
-  flags["cfs_wait_type"] =
-      options.cfs_wait_type ==
-              ghost_test::CompletelyFairScheduler::WaitType::kWaitSpin
-          ? "spin"
-          : "futex";
   flags["get_duration"] = absl::FormatDuration(options.get_duration);
   flags["range_duration"] = absl::FormatDuration(options.range_duration);
   flags["get_exponential_mean"] =
@@ -62,10 +59,7 @@ std::ostream& operator<<(std::ostream& os,
   flags["experiment_duration"] =
       absl::FormatDuration(options.experiment_duration);
   flags["discard_duration"] = absl::FormatDuration(options.discard_duration);
-  flags["scheduler"] =
-      (options.scheduler == ghost::GhostThread::KernelScheduler::kCfs)
-          ? "cfs"
-          : "ghost";
+  flags["scheduler"] = "ghost";
   flags["ghost_qos"] = std::to_string(options.ghost_qos);
 
   bool first = true;
@@ -86,16 +80,12 @@ Orchestrator::Orchestrator(Options options, size_t total_threads)
       network_(options_.throughput, options_.range_query_ratio),
       gen_(total_threads),
       first_run_(total_threads),
-      thread_pool_(total_threads) {
+      thread_pool_(total_threads){
   CHECK(!options_.rocksdb_db_path.empty());
   CHECK_GE(options_.range_query_ratio, 0.0);
   CHECK_LE(options_.range_query_ratio, 1.0);
   CHECK_GE(options_.load_generator_cpu, 0);
   CHECK_NE(options_.load_generator_cpu, kBackgroundThreadCpu);
-  CHECK(options_.scheduler != ghost::GhostThread::KernelScheduler::kCfs ||
-        options_.cfs_dispatcher_cpu != kBackgroundThreadCpu);
-  CHECK(options_.scheduler != ghost::GhostThread::KernelScheduler::kCfs ||
-        options_.cfs_dispatcher_cpu >= 0);
   for (const int cpu : options_.worker_cpus) {
     CHECK_GE(cpu, 0);
     CHECK_NE(cpu, kBackgroundThreadCpu);
@@ -136,9 +126,13 @@ Orchestrator::Orchestrator(Options options, size_t total_threads)
     }
     requests_.back().clear();
   }
-}
 
-Orchestrator::~Orchestrator() {}
+  CHECK_EQ(options_.worker_cpus.size(), 0);
+
+  InitThreadPool();
+
+  threads_ready_.Notify();
+}
 
 void Orchestrator::HandleRequest(Request& request, absl::BitGen& gen) {
   if (request.IsGet()) {
@@ -176,7 +170,7 @@ void Orchestrator::HandleGet(Request& request, absl::BitGen& gen) {
   //   clock_gettime(CLOCK_REALTIME,&ts2);
   //   fprintf(stderr, "microsecond:%ld\n",ts2.tv_sec*1000000000+ts2.tv_nsec - ts1.tv_sec*1000000000-ts1.tv_nsec);  //微秒
   // }
-  
+
   std::string response;
   Request::Get& get = std::get<Request::Get>(request.work);
   // CHECK(database_.Get(get.entry, response));
@@ -185,6 +179,7 @@ void Orchestrator::HandleGet(Request& request, absl::BitGen& gen) {
   if (now_duration - start_duration < service_time) {
     Spin(service_time - (now_duration - start_duration), now_duration);
   }
+  
 }
 
 void Orchestrator::HandleRange(Request& request, absl::BitGen& gen) {
@@ -264,6 +259,200 @@ void Orchestrator::Spin(absl::Duration duration,
   while (GetThreadCpuTime() - start_duration < duration) {
     // We are doing synthetic work, so do not issue 'pause' instructions.
   }
+}
+
+void Orchestrator::InitThreadPool() {
+  // Initialize the thread pool.
+  std::vector<ghost::GhostThread::KernelScheduler> kernel_schedulers;
+  std::vector<std::function<void(uint32_t)>> thread_work;
+  // Set up the load generator thread. The load generator thread runs in CFS.
+  kernel_schedulers.push_back(ghost::GhostThread::KernelScheduler::kCfs);
+  thread_work.push_back(
+      absl::bind_front(&Orchestrator::LoadGenerator, this));
+  // Set up the worker threads. The worker threads run in ghOSt.
+  kernel_schedulers.insert(kernel_schedulers.end(), options().num_workers,
+                           ghost::GhostThread::KernelScheduler::kGhost);
+  thread_work.insert(thread_work.end(), options().num_workers,
+                     absl::bind_front(&Orchestrator::Worker, this));
+  // Checks.
+  // Add 1 to account for the load generator thread.
+  CHECK_EQ(kernel_schedulers.size(), total_threads());
+  CHECK_EQ(kernel_schedulers.size(), thread_work.size());
+  // Pass the scheduler types and the thread work to 'Init'.
+  thread_pool().Init(kernel_schedulers, thread_work);
+}
+
+void Orchestrator::Terminate() {
+  static struct timespec req;
+  req.tv_sec = 2;
+  req.tv_nsec = 0;
+
+  const absl::Duration runtime = absl::Now() - start();
+  // Do this check after calculating 'runtime' to avoid inflating 'runtime'.
+  CHECK_GT(start(), absl::UnixEpoch());
+
+  // The load generator should exit first. If any worker were to exit before the
+  // load generator, the load generator would trigger
+  // `CHECK(ghost_.IsIdle(worker_sid))`.
+  thread_pool().MarkExit(0);
+  while (thread_pool().NumExited() < 1) {
+  }
+
+  for (size_t i = 1; i < thread_pool().NumThreads(); ++i) {
+    thread_pool().MarkExit(i);
+  }
+
+  while (thread_pool().NumExited() < total_threads()) {
+    // Makes ghOSt threads runnable so that they can exit.
+    for (size_t i = 0; i < options().num_workers; ++i) {
+      // We start at SID 1 (the first worker) since the load generator (SID 0)
+      // is not scheduled by ghOSt and is always runnable.
+      req.tv_nsec = i + 1;
+      nanosleep(&req, NULL);
+    }
+    // fprintf(stderr, "last %d thread!\n", thread_pool().NumExited());
+  }
+
+  PrintResults(runtime);
+  thread_pool().Join();
+  
+}
+
+void Orchestrator::GetIdleWorkerSIDs() {
+  idle_sids_.clear();
+  for (size_t i = 0; i < options().num_workers; ++i) {
+    // Add 1 to skip the load generator thread, which has SID 0.
+    uint32_t worker_sid = i + 1;
+    if (worker_work()[worker_sid]->num_requests.load(
+            std::memory_order_acquire) == 0) {
+      idle_sids_.push_back(worker_sid);
+    }
+  }
+}
+
+void Orchestrator::LoadGenerator(uint32_t sid) {
+
+  static struct timespec req;
+  req.tv_sec = 0;
+  req.tv_nsec = 0;
+
+  if (!first_run().Triggered(sid)) {
+    CHECK(first_run().Trigger(sid));
+    cpu_set_t cpuset = ghost::Topology::ToCpuSet(ghost::MachineTopology()->ToCpuList(std::vector<int>{
+                      options().load_generator_cpu}));
+    sched_setaffinity(0, sizeof(cpuset), &cpuset);
+
+    // Use 'printf' instead of 'std::cout' so that the print contents do not get
+    // interleaved with the dispatcher's and the workers' print contents.
+    printf("Load generator (SID %u, TID: %ld, affined to CPU %u)\n", sid,
+           syscall(SYS_gettid), options().load_generator_cpu);
+    threads_ready_.WaitForNotification();
+    set_start(absl::Now());
+    network().Start();
+  }
+
+  GetIdleWorkerSIDs();
+  uint32_t size = idle_sids_.size();
+  for (uint32_t i = 0; i < size; ++i) {
+    uint32_t worker_sid = idle_sids_.front();
+    // We can do a relaxed load rather than an acquire load because
+    // 'GetIdleWorkerSIDs' already did an acquire load for 'num_requests'.
+    CHECK_EQ(
+        worker_work()[worker_sid]->num_requests.load(std::memory_order_relaxed),
+        0);
+
+    // 测试原因
+    if (usleep(-worker_sid) == 0) {
+      // This worker has finished its work but has not yet marked itself idle in
+      // ghOSt. It is about to do so, so we cannot assign more work to it in the
+      // meantime. If we did assign more work to the worker and then mark the
+      // worker runnable, and then the worker marks itself idle, the worker will
+      // never wake up and we will lose the worker for the remainder of the
+      // experiment.
+      idle_sids_.pop_front();
+      continue;
+    }
+
+    worker_work()[worker_sid]->requests.clear();
+    Request request;
+    for (size_t i = 0; i < options().batch; ++i) {
+      if (network().Poll(request)) {
+        request.request_assigned = absl::Now();
+        worker_work()[worker_sid]->requests.push_back(request);
+      } else {
+        // No more requests waiting in the ingress queue, so give the
+        // requests we have so far to the worker.
+        break;
+      }
+    }
+    if (!worker_work()[worker_sid]->requests.empty()) {
+      // Assign the batch of requests to the next worker
+      idle_sids_.pop_front();
+      CHECK_LE(worker_work()[worker_sid]->requests.size(), options().batch);
+      worker_work()[worker_sid]->num_requests.store(
+          worker_work()[worker_sid]->requests.size(),
+          std::memory_order_release);
+      req.tv_nsec = worker_sid;
+      // fprintf(stderr, "wake up worker %d %ld\n", worker_sid, worker_work()[worker_sid]->requests[0].id);
+      nanosleep(&req, NULL);
+    } else {
+      // There is no work waiting in the ingress queue.
+      break;
+    }
+  }
+
+}
+
+void Orchestrator::Worker(uint32_t sid) {
+  static struct timespec req;
+  req.tv_sec = 1;
+  req.tv_nsec = 0;
+  if (!first_run().Triggered(sid)) {
+    CHECK(first_run().Trigger(sid));
+    printf("Worker (SID %u, TID: %ld, not affined to any CPU)\n", sid,
+           syscall(SYS_gettid));
+  }
+
+  WorkerWork* work = worker_work()[sid].get();
+
+  size_t num_requests = work->num_requests.load(std::memory_order_acquire);
+  if (num_requests == 0) {
+    // The worker might only be first scheduled when the process is exiting (so
+    // the worker does not have any requests to schedule). This if block
+    // captures that case.
+    // req.tv_nsec = sid;
+    // fprintf(stderr, "nanosleep worker %d empty queue\n", sid);
+    // nanosleep(&req, NULL);
+    // fprintf(stderr, "return nanosleep worker %d empty queue\n", sid);
+    return;
+  }
+  CHECK_LE(num_requests, options().batch);
+  CHECK_EQ(num_requests, work->requests.size());
+
+  for (size_t i = 0; i < num_requests; ++i) {
+    Request& request = work->requests[i];
+    // fprintf(stderr, "worker %d deal task\n", sid);
+    request.request_start = absl::Now();
+    HandleRequest(request, gen()[sid]);
+    // fprintf(stderr, "worker %d deal task finish\n", sid);
+    request.request_finished = absl::Now();
+    
+
+    requests()[sid].push_back(request);
+  }
+
+  // Set 'num_requests' to 0 before calling 'ghost_.MarkIdle' since the worker
+  // could be descheduled by ghOSt at any time after calling 'ghost_.MarkIdle'
+  // (or even before returning from 'ghost_.MarkIdle'!). The load generator
+  // checks to make sure that a worker with 'num_requests' set to 0 has also
+  // marked itself idle in ghOSt before assigning more work to it and marking it
+  // runnable again. See the comments above in 'LoadGenerator' for more details
+  // about the race condition this prevents.
+  work->num_requests.store(0, std::memory_order_release);
+  req.tv_nsec = sid;
+  // fprintf(stderr, "nanosleep worker %d\n", sid);
+  nanosleep(&req, NULL);
+  // fprintf(stderr, "return nanosleep worker %d %ld\n", sid, work->num_requests.load(std::memory_order_acquire));
 }
 
 }  // namespace ghost_test

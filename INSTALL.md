@@ -8,10 +8,12 @@ for instructions to install Bazel on your operating system.
 2\. Install ghOSt dependencies:
 
 ```
+# yum install -y make gcc rsync
 cd ~/ghost-kernel
 make headers_install INSTALL_HDR_PATH=/usr
 apt update
 apt install -y libnuma-dev libcap-dev libelf-dev libbfd-dev clang llvm zlib1g-dev python-is-python3 pip
+# or yum install -y numactl-libs libcap elfutils-libelf clang llvm python3
 ```
 
 3\. Compile the ghOSt userspace component. Run the following from the root of
