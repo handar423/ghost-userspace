@@ -100,7 +100,8 @@ int main(int argc, char* argv[]) {
   auto uap =
       new ghost::AgentProcess<ghost::FullShinjukuAgent<ghost::LocalEnclave>,
                               ghost::ShinjukuConfig>(config);
-
+  fprintf(stderr, "there!\n");
+  exit(0);
   ghost::Ghost::InitCore();
   printf("Initialization complete, ghOSt active.\n");
 

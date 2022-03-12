@@ -26,6 +26,8 @@ apt update && apt install -y bazel
 cd ~/ghost-userspace/
 bazel build -c opt ...
 
+# 在第一次报有关bpf_enable_stats的信息的错误之后需要修改下载的包中 linux-new/tools/lib/bpf/bpf.h/c 中关于 bpf_enable_stats的信息
+
 `-c opt` tells Bazel to build the targets with optimizations turned on. `...`
 tells Bazel to build all targets in the `BUILD` file and all `BUILD` files in
 subdirectories, including the core ghOSt library, the eBPF code, the schedulers,

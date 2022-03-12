@@ -27,7 +27,6 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 } cpu_data SEC(".maps");
 
-
 SEC("ghost_sched/skip_tick")
 int ghost_sched_skip_tick(struct bpf_ghost_sched *ctx)
 {

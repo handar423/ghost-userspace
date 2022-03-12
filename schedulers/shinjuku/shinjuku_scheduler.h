@@ -356,7 +356,9 @@ class FullShinjukuAgent : public FullAgent<ENCLAVE> {
     global_scheduler_ = SingleThreadShinjukuScheduler(
         &this->enclave_, *this->enclave_.cpus(), config.global_cpu_.id(),
         config.preemption_time_slice_);
+    
     this->StartAgentTasks();
+    exit(0);
     this->enclave_.Ready();
   }
 

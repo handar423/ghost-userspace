@@ -84,22 +84,23 @@ void bpf_program__set_types(struct bpf_program *prog, int prog_type,
 //
 // Returns the inserted program's FD on success, or -1 with errno set on
 // failure.
+// 此处省略bpf_link_create，因为内核尚未有此功能
 static int insert_prog(int ctl_fd, struct bpf_program *prog)
 {
 	int prog_fd = bpf_program__fd(prog);
 	int eat = bpf_program__get_expected_attach_type(prog);
-	int ret;
+	int ret = bpf_prog_attach(prog_fd, ctl_fd, eat, 0);
 
-	switch (eat) {
-	case BPF_GHOST_SCHED_SKIP_TICK:
-	case BPF_GHOST_SCHED_PNT:
-		ret = bpf_link_create(prog_fd, ctl_fd, eat, NULL);
-		break;
-	default:
-		/* no attach types yet, but here's how we'd do it */
-		ret = bpf_prog_attach(prog_fd, ctl_fd, eat, 0);
-		break;
-	}
+	// switch (eat) {
+	// case BPF_GHOST_SCHED_SKIP_TICK:
+	// case BPF_GHOST_SCHED_PNT:
+	// 	ret = bpf_link_create(prog_fd, ctl_fd, eat, NULL);
+	// 	break;
+	// default:
+	// 	/* no attach types yet, but here's how we'd do it */
+		
+	// 	break;
+	// }
 
 	// libbpf's functions typically return -error_code, but some *usually*
 	// just return -1 and have errno set, but *might* return -EINVAL.  It
@@ -135,10 +136,11 @@ int agent_bpf_init(bool tick_on_request)
 		return -1;
 
 	obj = ghost_bpf__open();
+
 	if (!obj) {
 		// ghost_bpf__open() clobbered errno.
 		errno = EINVAL;
-		return -1;
+		return -2;
 	}
 
 	bpf_map__resize(obj->maps.cpu_data, libbpf_num_possible_cpus());
@@ -177,7 +179,7 @@ int agent_bpf_init(bool tick_on_request)
 out_error:
 	ghost_bpf__destroy(obj);
 	errno = err;
-	return -1;
+	return -3;
 }
 
 // We'd like to use `enum bpf_attach_type eat` here, but for now we need an int

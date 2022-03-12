@@ -33,7 +33,7 @@ bpf_linkopts = [
 cc_library(
     name = "agent",
     srcs = [
-        "bpf/user/agent.c",
+        # "bpf/user/agent.c",
         "lib/agent.cc",
         "lib/channel.cc",
         "lib/enclave.cc",
@@ -41,15 +41,15 @@ cc_library(
         "lib/topology.cc",
     ],
     hdrs = [
-        "bpf/user/agent.h",
-        "bpf/user/ghost_bpf.skel.h",
-        "bpf/user/ghost_shared.h",
+        # "bpf/user/agent.h",
+        # "bpf/user/ghost_bpf.skel.h",
+        # "bpf/user/ghost_shared.h",
         "lib/agent.h",
         "lib/channel.h",
         "lib/enclave.h",
         "lib/scheduler.h",
         "lib/topology.h",
-        "//third_party:iovisor_bcc/trace_helpers.h",
+        # "//third_party:iovisor_bcc/trace_helpers.h",
     ],
     copts = compiler_flags,
     linkopts = bpf_linkopts + ["-lnuma"],
@@ -63,7 +63,7 @@ cc_library(
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
-        "@linux//:libbpf",
+        # "@linux-new//:libbpf",
     ],
 )
 
@@ -297,7 +297,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/functional:bind_front",
         "@com_google_absl//absl/strings:str_format",
-        "@linux//:libbpf",
+        "@linux-new//:libbpf",
     ],
 )
 
@@ -447,7 +447,7 @@ cc_binary(
     copts = compiler_flags,
     linkopts = bpf_linkopts,
     deps = [
-        "@linux//:libbpf",
+        "@linux-new//:libbpf",
     ],
 )
 
@@ -467,7 +467,7 @@ cc_binary(
     copts = compiler_flags,
     linkopts = bpf_linkopts,
     deps = [
-        "@linux//:libbpf",
+        "@linux-new//:libbpf",
     ],
 )
 
@@ -488,7 +488,7 @@ cc_binary(
     copts = compiler_flags,
     linkopts = bpf_linkopts,
     deps = [
-        "@linux//:libbpf",
+        "@linux-new//:libbpf",
     ],
 )
 
@@ -508,9 +508,9 @@ cc_binary(
     ],
     copts = compiler_flags,
     linkopts = bpf_linkopts,
-    deps = [
-        "@linux//:libbpf",
-    ],
+    # deps = [
+    #     "@linux-new//:libbpf",
+    # ],
 )
 
 # Shared library for ghOSt tests.

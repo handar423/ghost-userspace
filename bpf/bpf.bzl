@@ -12,7 +12,7 @@ def bpf_program(name, src, hdrs, bpf_object, **kwargs):
     """
     native.genrule(
         name = name,
-        srcs = ["@linux//:libbpf"] + [src] + hdrs,
+        srcs = ["@linux-new//:libbpf"] + [src] + hdrs,
         outs = [bpf_object],
         cmd = (
             "clang -g -O2 -target bpf -D__TARGET_ARCH_x86 " +
@@ -25,7 +25,7 @@ def bpf_program(name, src, hdrs, bpf_object, **kwargs):
             # (i.e., $(BINDIR)/external/linux/libbpf/include/*).
             #
             # `$@` is the location to write the eBPF object file.
-            "-I . -I $(BINDIR)/external/linux/libbpf/include -c $(location " + src + ") -o $@ && " +
+            "-I . -I $(BINDIR)/external/linux-new/libbpf/include -c $(location " + src + ") -o $@ && " +
             "llvm-strip -g $@"
         ),
         **kwargs
@@ -44,10 +44,10 @@ def bpf_skeleton(name, bpf_object, skel_hdr, **kwargs):
         name = name,
         # bpftool does not seem to be compiled when I include it in the `tools`
         # attribute list instead.
-        srcs = ["@linux//:bpftool", bpf_object],
+        srcs = ["@linux-new//:bpftool", bpf_object],
         outs = [skel_hdr],
         cmd = (
-            "$(BINDIR)/external/linux/bpftool/bin/bpftool gen skeleton $(location " + bpf_object + ") > $@ && " +
+            "$(BINDIR)/external/linux-new/bpftool/bin/bpftool gen skeleton $(location " + bpf_object + ") > $@ && " +
             # The libbpf headers are located in `libbpf` rather than `bpf`.
             "sed -i 's/#include <bpf/#include <libbpf/g' $@"
         ),

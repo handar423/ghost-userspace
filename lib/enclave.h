@@ -153,7 +153,7 @@ class Enclave {
   // If there was an old agent attached to the enclave, this blocks until that
   // agent exits.
   virtual void WaitForOldAgent() = 0;
-  virtual void InsertBpfPrograms() {}
+  // virtual void InsertBpfPrograms() {}
   // LocalEnclaves have a ctl fd, which various agent functions use.
   virtual int GetCtlFd() { return -1; }
 
@@ -448,7 +448,7 @@ class LocalEnclave final : public Enclave {
   // If there was an old agent attached to the enclave (i.e. holding a RW fd on
   // agent_online), this blocks until that FD is closed.
   void WaitForOldAgent() final;
-  void InsertBpfPrograms() final;
+  // void InsertBpfPrograms() final;
   int GetCtlFd() final { return ctl_fd_; }
 
   static int MakeNextEnclave();

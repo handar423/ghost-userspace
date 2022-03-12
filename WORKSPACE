@@ -81,13 +81,22 @@ http_archive(
 # We clone Linux so that we can use libbpf when compiling our eBPF programs.
 # Ideally we would instead clone our kernel-ghost repository, but we cannot do
 # that until the repository is publicly available.
-#
-# The archive we are downloading is for the first commit in Linux 5.11.
+# jys:此处降级linux
+# The archive we are downloading is for the first commit in Linux 5.4.
+# 这个只是为了新版bpftool
 http_archive(
-    name = "linux",
+    name = "linux-new",
     url = "https://github.com/torvalds/linux/archive/f40ddce88593482919761f74910f42f4b84c004b.tar.gz",
     sha256 = "6e96995653ba8433970a72282de69a78262f5d8c3fff99083c59a6c877427cba",
     strip_prefix = "linux-f40ddce88593482919761f74910f42f4b84c004b",
+    build_file = "//third_party:linux-new.BUILD",
+)
+
+http_archive(
+    name = "linux",
+    url = "https://github.com/torvalds/linux/archive/refs/tags/v5.4.tar.gz",
+    sha256 = "0290ec627aeb7298c764fadc7d5783360b26e4a1228c986a4a2eb798fbf7931d",
+    strip_prefix = "linux-5.4",
     build_file = "//third_party:linux.BUILD",
 )
 

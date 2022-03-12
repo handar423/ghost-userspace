@@ -22,7 +22,6 @@
 #include <regex>  // NOLINT: no RE2; ghost limits itself to absl
 
 #include "absl/base/attributes.h"
-#include "bpf/user/agent.h"
 #include "kernel/ghost_uapi.h"
 #include "lib/agent.h"
 #include "lib/scheduler.h"
@@ -91,7 +90,7 @@ void Enclave::Ready() {
 
   for (auto scheduler : schedulers_) scheduler->EnclaveReady();
 
-  InsertBpfPrograms();
+  // InsertBpfPrograms();
 
   // We could use agents_ here, but this allows extra checking.
   for (const Cpu& cpu : enclave_cpus_) {
@@ -428,18 +427,19 @@ LocalEnclave::LocalEnclave(AgentConfig config)
 
   BuildCpuReps();
 
-  bool tick_on_request = false;
-  switch (config_.tick_config_) {
-    case CpuTickConfig::kNoTicks:
-    case CpuTickConfig::kTickOnRequest:
-      // kNoTicks is the same as kTickOnRequest: you just never ask for one.
-      tick_on_request = true;
-      break;
-    case CpuTickConfig::kAllTicks:
-      tick_on_request = false;
-      break;
-  };
-  CHECK_EQ(agent_bpf_init(tick_on_request), 0);
+  // 跳过bpf
+  // bool tick_on_request = false;
+  // switch (config_.tick_config_) {
+  //   case CpuTickConfig::kNoTicks:
+  //   case CpuTickConfig::kTickOnRequest:
+  //     // kNoTicks is the same as kTickOnRequest: you just never ask for one.
+  //     tick_on_request = true;
+  //     break;
+  //   case CpuTickConfig::kAllTicks:
+  //     tick_on_request = false;
+  //     break;
+  // };
+  // CHECK_EQ(agent_bpf_init(tick_on_request), 0);
 }
 
 LocalEnclave::~LocalEnclave() {
@@ -455,13 +455,13 @@ LocalEnclave::~LocalEnclave() {
   Ghost::SetGlobalStatusWordTable(nullptr);
 }
 
-void LocalEnclave::InsertBpfPrograms() {
-  int ret;
-  do {
-    ret = agent_bpf_insert_registered(ctl_fd_);
-  } while (ret && errno == EBUSY);
-  CHECK_EQ(ret, 0);
-}
+// void LocalEnclave::InsertBpfPrograms() {
+//   int ret;
+//   do {
+//     ret = agent_bpf_insert_registered(ctl_fd_);
+//   } while (ret && errno == EBUSY);
+//   CHECK_EQ(ret, 0);
+// }
 
 bool LocalEnclave::CommitRunRequests(const CpuList& cpu_list) {
   SubmitRunRequests(cpu_list);
@@ -637,7 +637,7 @@ void LocalEnclave::AdvertiseOnline() {
 void LocalEnclave::PrepareToExit() {
   close(agent_online_fd_);
   agent_online_fd_ = -1;
-  agent_bpf_destroy();
+  // agent_bpf_destroy();
 }
 
 void LocalEnclave::WaitForOldAgent() {
