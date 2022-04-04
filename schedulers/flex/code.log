@@ -1,0 +1,50 @@
+前提：加入的进程都是worker thread
+
+    目前不考虑多task queue（在当前逻辑里，vRAN只有一个task queue）
+
+    全局调度(full agent)
+
+    两个worker class类（vran, batch）
+        此时对于batch的调度使用简单逻辑进行（参考shinjuku）
+
+    不允许抢占
+
+config:
+    需要参数：空任务判定时间，单位纳秒（TODO:看一眼能打到的最小单位是多少），默认值1000
+
+FlexTask:
+    需要参数：
+        上一次被调度的时间
+        task的状态（当前是否运行）
+        TODO 上次运行的CPU（Cache）
+
+注意：global scheduler是单线程的
+
+全局：（放在global scheduler里，global scheduler不需要迁移）
+    各CPU的FlexRAN空闲时间记录
+    // 总的CPU占用时间记录
+    目前的CPU分配情况（FlexRAN的各个实例占几个，Batch app占几个）
+
+目前的逻辑是，每轮循环没有空过，就加CPU，有大于一次空，就减CPU，每次操作一个
+
+1. 添加global_scheduler变量
+2. 写逻辑
+
+
+--> 先commit，然后跟殷旻要改完的版本
+
+-->> 今天
+
+尝试2：考虑多task queue（在当前逻辑里，vRAN只有一个task queue）
+
+对于每一个DU分16个可能的task queue id
+(task queue id)(DU id)(batch app id)
+dequeue的时候再task queue间轮训
+更新时间统计各个task queue间最慢的
+
+
+--> 可以用之前的debug
+
+-->> 明天
+
+遗留一个问题：如何支持batch app

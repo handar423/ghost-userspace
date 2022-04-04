@@ -11,9 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Runs the RocksDB Shenango experiments.
+"""Runs the RocksDB flex experiments.
 
-This script runs the RocksDB Shinjuku+Shenango experiments on ghOSt and CFS. The
+This script runs the RocksDB flex experiments on ghOSt and CFS. The
 experiments contain a mix of short and long requests (Shinjuku) and the RocksDB
 threads are co-located with Antagonist threads (Shenango).
 """
@@ -52,7 +52,7 @@ def RunCfs():
 
   Run(e)
 
-
+# 需要确认殷旻的rocksdb写法
 def RunGhost():
   """Runs the ghOSt experiment."""
   e: Experiment = Experiment()
@@ -62,7 +62,7 @@ def RunGhost():
   # e.throughputs.extend(list(i for i in range(140000, 151000, 1000)))
   e.rocksdb = GetRocksDBOptions(Scheduler.GHOST, _NUM_CPUS, _NUM_GHOST_WORKERS)
   e.rocksdb.range_query_ratio = 0.005
-  e.rocksdb.ghost_qos = 2
+  e.rocksdb.ghost_qos = 16
   e.antagonist = GetAntagonistOptions(Scheduler.GHOST, _NUM_ANTAGONIST_CPUS)
   e.antagonist.ghost_qos = 1
   e.ghost = GetGhostOptions(_NUM_CPUS)

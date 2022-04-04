@@ -119,6 +119,43 @@ cc_binary(
 )
 
 cc_library(
+    name = "flex_scheduler",
+    srcs = [
+        "schedulers/flex/flex_orchestrator.cc",
+        "schedulers/flex/flex_scheduler.cc",
+    ],
+    hdrs = [
+        "schedulers/flex/flex_orchestrator.h",
+        "schedulers/flex/flex_scheduler.h",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":agent",
+        ":ghost",
+        ":shared",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:bind_front",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_binary(
+    name = "agent_flex",
+    srcs = [
+        "schedulers/flex/agent_flex.cc",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    deps = [
+        ":agent",
+        ":flex_scheduler",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/flags:parse",
+    ],
+)
+
+cc_library(
     name = "sol_scheduler",
     srcs = [
         "schedulers/sol/sol_scheduler.cc",
@@ -809,6 +846,7 @@ cc_binary(
     deps = [
         ":edf_scheduler",
         ":shinjuku_scheduler",
+        ":flex_scheduler",
         ":sol_scheduler",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/flags:usage",
@@ -827,3 +865,124 @@ cc_test(
         "@com_google_googletest//:gtest",
     ],
 )
+
+
+
+# rocksdb without ghost 
+cc_binary(
+    name = "rocksdb_origin",
+    srcs = [
+        "experiments/rocksdb_origin/clock.h",
+        "experiments/rocksdb_origin/database.cc",
+        "experiments/rocksdb_origin/database.h",
+        "experiments/rocksdb_origin/ingress.cc",
+        "experiments/rocksdb_origin/ingress.h",
+        "experiments/rocksdb_origin/latency.cc",
+        "experiments/rocksdb_origin/latency.h",
+        "experiments/rocksdb_origin/main.cc",
+        "experiments/rocksdb_origin/orchestrator.cc",
+        "experiments/rocksdb_origin/orchestrator.h",
+        "experiments/rocksdb_origin/request.h",
+        "experiments/rocksdb_origin/thread_pool.cc",
+        "experiments/rocksdb_origin/thread_pool.h",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    deps = [
+        ":ghost",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/functional:bind_front",
+        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/random:bit_gen_ref",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@rocksdb",
+    ],
+)
+
+cc_test(
+    name = "database_origin_test",
+    size = "small",
+    srcs = [
+        "experiments/rocksdb_origin/database.cc",
+        "experiments/rocksdb_origin/database.h",
+        "experiments/rocksdb_origin/database_test.cc",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":base",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_googletest//:gtest",
+        "@rocksdb",
+    ],
+)
+
+cc_test(
+    name = "latency_origin_test",
+    size = "small",
+    srcs = [
+        "experiments/rocksdb_origin/latency.cc",
+        "experiments/rocksdb_origin/latency.h",
+        "experiments/rocksdb_origin/latency_test.cc",
+        "experiments/rocksdb_origin/request.h",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":base",
+        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "synthetic_network_origin_test",
+    size = "large",
+    srcs = [
+        "experiments/rocksdb_origin/clock.h",
+        "experiments/rocksdb_origin/database.h",
+        "experiments/rocksdb_origin/ingress.cc",
+        "experiments/rocksdb_origin/ingress.h",
+        "experiments/rocksdb_origin/request.h",
+        "experiments/rocksdb_origin/synthetic_network_test.cc",
+    ],
+    copts = compiler_flags,
+    deps = [
+        ":base",
+        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/random:bit_gen_ref",
+        "@com_google_absl//absl/time",
+        "@com_google_googletest//:gtest_main",
+        "@rocksdb",
+    ],
+)
+
+
+cc_binary(
+    name = "libhijack.so", #mylib是头文件的名字
+    srcs = [
+        "experiments/hijack/ghost_status.h",
+        "experiments/hijack/ghost_status.cc",
+        "experiments/hijack/nanosleep_op.h",
+        "experiments/hijack/nanosleep_op.cc",
+        "experiments/hijack/usleep_op.h",
+        "experiments/hijack/usleep_op.cc",
+    ],
+    deps = [
+        ":base",
+        ":experiments_shared",
+        ":ghost",
+        "@com_google_absl//absl/time",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    linkopts = [
+        "-lstdc++",
+        "-ldl",
+        "-fPIC",
+        "-shared", #链接时候的命令
+    ],
+    linkshared = True,
+    linkstatic = True,
+) 

@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// #include <chrono>
-// #include <ctime>
-// using namespace std::chrono;
-#include "schedulers/shinjuku/shinjuku_scheduler.h"
+#include "schedulers/flex/flex_scheduler.h"
 
 #include "absl/strings/str_format.h"
 
+// 单位纳秒
+#define VRAN_EMPTY_FLAG 1000
+
 namespace ghost {
 
-void ShinjukuTask::SetRuntime(absl::Duration new_runtime,
+inline vRAN_id_t get_task_vran_id(FlexTask* task){
+  return task->sp->GetQoS() & VRAN_ID_MASK;
+}
+
+void FlexTask::SetRuntime(absl::Duration new_runtime,
                               bool update_elapsed_runtime) {
   CHECK_GE(new_runtime, runtime);
   if (update_elapsed_runtime) {
@@ -30,11 +34,12 @@ void ShinjukuTask::SetRuntime(absl::Duration new_runtime,
   runtime = new_runtime;
 }
 
-void ShinjukuTask::UpdateRuntime() {
+// 这里会有10个微秒的误差，所以不用这个函数，因为系统调用太慢了所以也不用，我们直接在每一个任务返回时更新runtime（此时走syscall），而轮训的粒度由参数决定
+void FlexTask::UpdateRuntime() {
   // We read the runtime from the status word rather than make a syscall. The
   // runtime in the status word may be out-of-sync with the true runtime by up
   // to 10 microseconds (which is the timer interrupt period). This is alright
-  // for Shinjuku since we only need an accurate measure of the task's runtime
+  // for Flex since we only need an accurate measure of the task's runtime
   // to implement the preemption time slice and the global agent uses Abseil's
   // clock functionality to approximate the current elapsed runtime. The syscall
   // will return the true runtime for the task, but it needs to acquire a
@@ -43,24 +48,35 @@ void ShinjukuTask::UpdateRuntime() {
   SetRuntime(runtime, /* update_elapsed_runtime = */ true);
 }
 
-ShinjukuScheduler::ShinjukuScheduler(
+FlexScheduler::FlexScheduler(
     Enclave* enclave, CpuList cpus,
-    std::shared_ptr<TaskAllocator<ShinjukuTask>> allocator, int32_t global_cpu,
+    std::shared_ptr<TaskAllocator<FlexTask>> allocator, int32_t global_cpu,
+    absl::Duration loop_empty_time_slice,
     absl::Duration preemption_time_slice)
     : BasicDispatchScheduler(enclave, std::move(cpus), std::move(allocator)),
       global_cpu_(global_cpu),
       global_channel_(GHOST_MAX_QUEUE_ELEMS, /*node=*/0),
+      loop_empty_time_slice_(loop_empty_time_slice),
       preemption_time_slice_(preemption_time_slice) {
   if (!cpus.IsSet(global_cpu_)) {
     Cpu c = cpus.Front();
     CHECK(c.valid());
     global_cpu_ = c.id();
   }
+
+  for (const Cpu& cpu : cpus) {
+    cpu_assign_cpu_key_[cpu.id()] = 0;
+    cpu_assign_vran_id_key_[0].emplace_back(cpu.id());
+  }
+  // 防止在后续调用cpu_assign_cpu_key_[0]时有误
+  cpu_assign_cpu_key_[0] = -1;
+
+  last_global_scheduler_time = absl::Now();
 }
 
-ShinjukuScheduler::~ShinjukuScheduler() {}
+FlexScheduler::~FlexScheduler() {}
 
-void ShinjukuScheduler::EnclaveReady() {
+void FlexScheduler::EnclaveReady() {
   for (const Cpu& cpu : cpus()) {
     CpuState* cs = cpu_state(cpu);
     cs->agent = enclave()->GetAgent(cpu);
@@ -68,16 +84,16 @@ void ShinjukuScheduler::EnclaveReady() {
   }
 }
 
-bool ShinjukuScheduler::Available(const Cpu& cpu) {
+bool FlexScheduler::Available(const Cpu& cpu) {
   CpuState* cs = cpu_state(cpu);
   return cs->agent->cpu_avail();
 }
 
-void ShinjukuScheduler::DumpAllTasks() {
+void FlexScheduler::DumpAllTasks() {
   fprintf(stderr, "task        state       rq_pos  P\n");
-  allocator()->ForEachTask([](Gtid gtid, const ShinjukuTask* task) {
+  allocator()->ForEachTask([](Gtid gtid, const FlexTask* task) {
     absl::FPrintF(stderr, "%-12s%-12s%c\n", gtid.describe(),
-                  ShinjukuTask::RunStateToString(task->run_state),
+                  FlexTask::RunStateToString(task->run_state),
                   task->prio_boost ? 'P' : '-');
     return true;
   });
@@ -85,7 +101,7 @@ void ShinjukuScheduler::DumpAllTasks() {
   for (auto const& it : orchs_) it.second->DumpSchedParams();
 }
 
-void ShinjukuScheduler::DumpState(const Cpu& agent_cpu, int flags) {
+void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   if (flags & kDumpAllTasks) {
     DumpAllTasks();
   }
@@ -109,8 +125,8 @@ void ShinjukuScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   fprintf(stderr, "\n");
 }
 
-ShinjukuScheduler::CpuState* ShinjukuScheduler::cpu_state_of(
-    const ShinjukuTask* task) {
+FlexScheduler::CpuState* FlexScheduler::cpu_state_of(
+    const FlexTask* task) {
   CHECK(task->oncpu());
   CpuState* result = &cpu_states_[task->cpu];
   CHECK_EQ(result->current, task);
@@ -118,18 +134,18 @@ ShinjukuScheduler::CpuState* ShinjukuScheduler::cpu_state_of(
 }
 
 // Map the leader's shared memory region if we haven't already done so.
-void ShinjukuScheduler::HandleNewGtid(ShinjukuTask* task, pid_t tgid) {
+void FlexScheduler::HandleNewGtid(FlexTask* task, pid_t tgid) {
   CHECK_GE(tgid, 0);
 
   if (orchs_.find(tgid) == orchs_.end()) {
-    auto orch = std::make_shared<ShinjukuOrchestrator>();
+    auto orch = std::make_shared<FlexOrchestrator>();
     if (!orch->Init(tgid)) {
       // If the task's group leader has already exited and closed the PrioTable
       // fd while we are handling TaskNew, it is possible that we cannot find
       // the PrioTable.
       // Just set has_work so that we schedule this task and allow it to exit.
       // We also need to give it an sp; various places call task->sp->qos_.
-      static ShinjukuSchedParams dummy_sp;
+      static FlexSchedParams dummy_sp;
       task->has_work = true;
       task->sp = &dummy_sp;
       return;
@@ -139,7 +155,7 @@ void ShinjukuScheduler::HandleNewGtid(ShinjukuTask* task, pid_t tgid) {
   }
 }
 
-void ShinjukuScheduler::UpdateTaskRuntime(ShinjukuTask* task,
+void FlexScheduler::UpdateTaskRuntime(FlexTask* task,
                                           absl::Duration new_runtime,
                                           bool update_elapsed_runtime) {
   task->SetRuntime(new_runtime, update_elapsed_runtime);
@@ -153,7 +169,8 @@ void ShinjukuScheduler::UpdateTaskRuntime(ShinjukuTask* task,
   }
 }
 
-void ShinjukuScheduler::TaskNew(ShinjukuTask* task, const Message& msg) {
+// 增加CPU分配
+void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_new* payload =
       static_cast<const ghost_msg_payload_task_new*>(msg.payload());
 
@@ -162,14 +179,34 @@ void ShinjukuScheduler::TaskNew(ShinjukuTask* task, const Message& msg) {
   UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
                     /* update_elapsed_runtime = */ false);
   task->seqnum = msg.seqnum();
-  task->run_state = ShinjukuTask::RunState::kBlocked;  // Need this in the
+  task->run_state = FlexTask::RunState::kBlocked;  // Need this in the
                                                        // runnable case anyway.
 
   const Gtid gtid(payload->gtid);
   const pid_t tgid = gtid.tgid();
   HandleNewGtid(task, tgid);
-  if (payload->runnable) Enqueue(task);
 
+  // 为对应的VRAN增加CPU分配上限
+  uint32_t vran_id = get_task_vran_id(task);
+  if(vran_max_cpu_number_.count(vran_id) == 0){
+    vran_max_cpu_number_[vran_id] = 1;
+    vran_empty_times_from_last_schduler_[vran_id] = 0;
+    vran_last_assign_vran_cpus_[vran_id] = 0;
+  } else {
+    vran_max_cpu_number_[vran_id] += 1;
+  }
+
+  // 若有，分配一个新的CPU
+  if(!cpu_assign_vran_id_key_[0].empty()){
+    auto it = cpu_assign_vran_id_key_[0].begin();
+    cpu_assign_vran_id_key_[vran_id].insert(*it);
+    cpu_assign_cpu_key_[*it] = vran_id;
+    cpu_assign_vran_id_key_[0].erase(it);
+  }
+
+
+  if (payload->runnable) Enqueue(task);
+    
   num_tasks_++;
 
   auto iter = orchs_.find(tgid);
@@ -188,7 +225,7 @@ void ShinjukuScheduler::TaskNew(ShinjukuTask* task, const Message& msg) {
   }
 }
 
-void ShinjukuScheduler::TaskRunnable(ShinjukuTask* task, const Message& msg) {
+void FlexScheduler::TaskRunnable(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_wakeup* payload =
       static_cast<const ghost_msg_payload_task_wakeup*>(msg.payload());
 
@@ -202,21 +239,28 @@ void ShinjukuScheduler::TaskRunnable(ShinjukuTask* task, const Message& msg) {
   Enqueue(task, /* back = */ false);
 }
 
-void ShinjukuScheduler::TaskDeparted(ShinjukuTask* task, const Message& msg) {}
+void FlexScheduler::TaskDeparted(FlexTask* task, const Message& msg) {}
 
-void ShinjukuScheduler::TaskDead(ShinjukuTask* task, const Message& msg) {
+void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   CHECK_EQ(task->run_state,
-           ShinjukuTask::RunState::kBlocked);  // Need to schedule to exit.
+           FlexTask::RunState::kBlocked);  // Need to schedule to exit.
   allocator()->FreeTask(task);
 
   num_tasks_--;
 }
 
-void ShinjukuScheduler::TaskBlocked(ShinjukuTask* task, const Message& msg) {
+// 更新CPU时间
+void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_blocked* payload =
       reinterpret_cast<const ghost_msg_payload_task_blocked*>(msg.payload());
 
   DCHECK_EQ(payload->runtime, task->status_word.runtime());
+
+  uint32_t vran_id = get_task_vran_id(task);
+  // 两者单位一致，此处不处理
+  if(vran_id != 0 && payload->runtime < VRAN_EMPTY_FLAG){
+    vran_empty_times_from_last_schduler_[vran_id] += 1;
+  }
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -233,10 +277,10 @@ void ShinjukuScheduler::TaskBlocked(ShinjukuTask* task, const Message& msg) {
   } else {
     CHECK(task->paused());
   }
-  task->run_state = ShinjukuTask::RunState::kBlocked;
+  task->run_state = FlexTask::RunState::kBlocked;
 }
 
-void ShinjukuScheduler::TaskPreempted(ShinjukuTask* task, const Message& msg) {
+void FlexScheduler::TaskPreempted(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_preempt* payload =
       reinterpret_cast<const ghost_msg_payload_task_preempt*>(msg.payload());
 
@@ -261,7 +305,7 @@ void ShinjukuScheduler::TaskPreempted(ShinjukuTask* task, const Message& msg) {
     // The task was preempted, so add it to the front of run queue. We do this
     // because (1) the task could have been holding an important lock when it
     // was preempted so we could improve performance by scheduling the task
-    // again as soon as possible and (2) because the Shinjuku algorithm assumes
+    // again as soon as possible and (2) because the Flex algorithm assumes
     // tasks are not preempted by other scheduling classes so getting the task
     // scheduled back onto the CPU as soon as possible is important to
     // faithfully implement the algorithm.
@@ -272,11 +316,18 @@ void ShinjukuScheduler::TaskPreempted(ShinjukuTask* task, const Message& msg) {
   }
 }
 
-void ShinjukuScheduler::TaskYield(ShinjukuTask* task, const Message& msg) {
+// 更新CPU时间
+void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_yield* payload =
       reinterpret_cast<const ghost_msg_payload_task_yield*>(msg.payload());
 
   DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  
+  uint32_t vran_id = get_task_vran_id(task);
+  // 两者单位一致，此处不处理
+  if(vran_id != 0 && payload->runtime < VRAN_EMPTY_FLAG){
+    vran_empty_times_from_last_schduler_[vran_id] += 1;
+  }
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -288,52 +339,61 @@ void ShinjukuScheduler::TaskYield(ShinjukuTask* task, const Message& msg) {
     CpuState* cs = cpu_state_of(task);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
-    Yield(task);
+    Yield(task, vran_id);
   } else {
     CHECK(task->queued() || task->paused());
   }
 }
 
-void ShinjukuScheduler::DiscoveryStart() { in_discovery_ = true; }
+void FlexScheduler::DiscoveryStart() { in_discovery_ = true; }
 
-void ShinjukuScheduler::DiscoveryComplete() {
+void FlexScheduler::DiscoveryComplete() {
   for (auto& scraper : orchs_) {
     scraper.second->RefreshAllSchedParams(kSchedCallbackFunc);
   }
   in_discovery_ = false;
 }
 
-void ShinjukuScheduler::Yield(ShinjukuTask* task) {
+void FlexScheduler::Yield(FlexTask* task, vRAN_id_t vran_id) {
   // An oncpu() task can do a sched_yield() and get here via
-  // ShinjukuTaskYield(). We may also get here if the scheduler wants to inhibit
+  // FlexTaskYield(). We may also get here if the scheduler wants to inhibit
   // a task from being picked in the current scheduling round (see
   // GlobalSchedule()).
   CHECK(task->oncpu() || task->queued());
-  task->run_state = ShinjukuTask::RunState::kYielding;
-  yielding_tasks_.emplace_back(task);
+  task->run_state = FlexTask::RunState::kYielding;
+  if(vran_id)
+    vran_yielding_tasks_.emplace_back(task);
+  else
+    yielding_tasks_.emplace_back(task);
 }
 
-void ShinjukuScheduler::Unyield(ShinjukuTask* task) {
+void FlexScheduler::Unyield(FlexTask* task) {
   CHECK(task->yielding());
 
   auto it = std::find(yielding_tasks_.begin(), yielding_tasks_.end(), task);
-  CHECK(it != yielding_tasks_.end());
-  yielding_tasks_.erase(it);
+  if(it != yielding_tasks_.end()){
+    yielding_tasks_.erase(it);
+  } else {
+    auto it = std::find(vran_yielding_tasks_.begin(), vran_yielding_tasks_.end(), task);
+    // 应恒为真
+    CHECK(it != vran_yielding_tasks_.end());
+    vran_yielding_tasks_.erase(it);
+  }
 
   Enqueue(task);
 }
 
-void ShinjukuScheduler::Enqueue(ShinjukuTask* task, bool back) {
+void FlexScheduler::Enqueue(FlexTask* task, bool back) {
   CHECK_EQ(task->unschedule_level,
-           ShinjukuTask::UnscheduleLevel::kNoUnschedule);
+           FlexTask::UnscheduleLevel::kNoUnschedule);
   if (!task->has_work) {
-    // We'll re-enqueue when this ShinjukuTask has work to do during periodic
+    // We'll re-enqueue when this FlexTask has work to do during periodic
     // scraping of PrioTable.
-    task->run_state = ShinjukuTask::RunState::kPaused;
+    task->run_state = FlexTask::RunState::kPaused;
     return;
   }
 
-  task->run_state = ShinjukuTask::RunState::kQueued;
+  task->run_state = FlexTask::RunState::kQueued;
   if (back && !task->prio_boost) {
     run_queue_[task->sp->GetQoS()].emplace_back(task);
   } else {
@@ -341,43 +401,56 @@ void ShinjukuScheduler::Enqueue(ShinjukuTask* task, bool back) {
   }
 }
 
-ShinjukuTask* ShinjukuScheduler::Dequeue() {
+// 等于0时行为等于普通的Dequeue
+FlexTask* FlexScheduler::Dequeue(vRAN_id_t vran_id) {
   if (RunqueueEmpty()) {
     return nullptr;
   }
+  struct FlexTask* task = nullptr;
 
-  std::deque<ShinjukuTask*>& rq = run_queue_[FirstFilledRunqueue()];
-  struct ShinjukuTask* task = rq.front();
+  if(vran_id == 0){
+    std::deque<FlexTask*>& rq = run_queue_[FirstFilledRunqueue()];
+    task = rq.front();
+  } else {
+    std::deque<FlexTask*>& rq = run_queue_[vran_id];
+    task = rq.front();
+  }
   CHECK_NE(task, nullptr);
   CHECK(task->has_work);
   CHECK_EQ(task->unschedule_level,
-           ShinjukuTask::UnscheduleLevel::kNoUnschedule);
+           FlexTask::UnscheduleLevel::kNoUnschedule);
   rq.pop_front();
 
   return task;
 }
 
-ShinjukuTask* ShinjukuScheduler::Peek() {
+// 等于0时行为等于普通的Peek
+FlexTask* FlexScheduler::Peek(vRAN_id_t vran_id) {
   if (RunqueueEmpty()) {
     return nullptr;
   }
-
-  ShinjukuTask* task = run_queue_[FirstFilledRunqueue()].front();
+  struct FlexTask* task = nullptr;
+  
+  if(vran_id == 0){
+    task = run_queue_[FirstFilledRunqueue()].front();
+  } else {
+    task = run_queue_[vran_id].front();
+  }
   CHECK(task->has_work);
   CHECK_EQ(task->unschedule_level,
-           ShinjukuTask::UnscheduleLevel::kNoUnschedule);
+           FlexTask::UnscheduleLevel::kNoUnschedule);
 
   return task;
 }
 
-void ShinjukuScheduler::RemoveFromRunqueue(ShinjukuTask* task) {
+void FlexScheduler::RemoveFromRunqueue(FlexTask* task) {
   CHECK(task->queued());
 
   for (auto& [qos, rq] : run_queue_) {
     for (int pos = rq.size() - 1; pos >= 0; pos--) {
       // The [] operator for 'std::deque' is constant time
       if (rq[pos] == task) {
-        task->run_state = ShinjukuTask::RunState::kPaused;
+        task->run_state = FlexTask::RunState::kPaused;
         rq.erase(rq.cbegin() + pos);
         return;
       }
@@ -387,7 +460,7 @@ void ShinjukuScheduler::RemoveFromRunqueue(ShinjukuTask* task) {
   CHECK(false);
 }
 
-void ShinjukuScheduler::UnscheduleTask(ShinjukuTask* task) {
+void FlexScheduler::UnscheduleTask(FlexTask* task) {
   CHECK_NE(task, nullptr);
   CHECK(task->oncpu());
 
@@ -403,12 +476,12 @@ void ShinjukuScheduler::UnscheduleTask(ShinjukuTask* task) {
 
   CpuState* cs = cpu_state(cpu);
   cs->current = nullptr;
-  task->run_state = ShinjukuTask::RunState::kPaused;
-  task->unschedule_level = ShinjukuTask::UnscheduleLevel::kNoUnschedule;
+  task->run_state = FlexTask::RunState::kPaused;
+  task->unschedule_level = FlexTask::UnscheduleLevel::kNoUnschedule;
 }
 
-void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
-                                            const ShinjukuSchedParams* sp,
+void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
+                                            const FlexSchedParams* sp,
                                             Gtid oldgtid) {
   Gtid gtid = sp->GetGtid();
 
@@ -429,10 +502,10 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
     orch.MakeEngineRunnable(sp);
   }
 
-  ShinjukuTask* task = allocator()->GetTask(gtid);
+  FlexTask* task = allocator()->GetTask(gtid);
   if (!task) {
     // We are too early (i.e. haven't seen MSG_TASK_NEW for gtid) in which
-    // case ignore the update for now. We'll grab the latest ShinjukuSchedParams
+    // case ignore the update for now. We'll grab the latest FlexSchedParams
     // from shmem in the MSG_TASK_NEW handler.
     //
     // We are too late (i.e have already seen MSG_TASK_DEAD for gtid) in
@@ -446,7 +519,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
   // not required by sched_yield() system call.
   //
   // To simplify state transitions we undo the kYielding behavior if
-  // a ShinjukuSchedParams update is also detected in this scheduling iteration.
+  // a FlexSchedParams update is also detected in this scheduling iteration.
   if (task->yielding()) Unyield(task);
 
   // Copy updated params into task->..
@@ -463,7 +536,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
     task->elapsed_runtime = absl::ZeroDuration();
   }
 
-  // A kBlocked task is not affected by any changes to ShinjukuSchedParams.
+  // A kBlocked task is not affected by any changes to FlexSchedParams.
   if (task->blocked()) {
     return;
   }
@@ -477,7 +550,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
     CHECK(
         task->paused() ||
         (task->oncpu() && task->unschedule_level ==
-                              ShinjukuTask::UnscheduleLevel::kMustUnschedule));
+                              FlexTask::UnscheduleLevel::kMustUnschedule));
     if (task->has_work) {
       if (task->paused()) {
         // For repeatables, the orchestrator indicates that it is done polling
@@ -490,7 +563,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
         // We check this above, but do it again here to make it clear to anyone
         // reading how we get to this branch.
         CHECK_EQ(task->unschedule_level,
-                 ShinjukuTask::UnscheduleLevel::kMustUnschedule);
+                 FlexTask::UnscheduleLevel::kMustUnschedule);
 
         // The task is currently running on the CPU because it had work. It was
         // then marked as having no work, so the level was set to
@@ -503,7 +576,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
         // is an already queued task in the runqueue that needs to take the
         // place of `task` on the CPU.
         task->unschedule_level =
-            ShinjukuTask::UnscheduleLevel::kCouldUnschedule;
+            FlexTask::UnscheduleLevel::kCouldUnschedule;
       }
     }
     return;  // case (a).
@@ -534,7 +607,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
       // queued tasks need to take the place of 'task'.)
       if (task->oncpu()) {
         task->unschedule_level =
-            ShinjukuTask::UnscheduleLevel::kCouldUnschedule;
+            FlexTask::UnscheduleLevel::kCouldUnschedule;
       }
     } else {  // case (c).
       if (task->oncpu()) {
@@ -554,7 +627,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
         // (2: Or the sched item for `task` is updated more than once in the
         // stream and the final read to the sched item indicates that `task` has
         // work again and does not need to be unscheduled.)
-        task->unschedule_level = ShinjukuTask::UnscheduleLevel::kMustUnschedule;
+        task->unschedule_level = FlexTask::UnscheduleLevel::kMustUnschedule;
       } else if (task->queued()) {
         RemoveFromRunqueue(task);
       } else {
@@ -563,7 +636,7 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
       CHECK(task->paused() ||
             (task->oncpu() &&
              task->unschedule_level ==
-                 ShinjukuTask::UnscheduleLevel::kMustUnschedule));
+                 FlexTask::UnscheduleLevel::kMustUnschedule));
       if (orch.Repeating(task->sp)) {
         paused_repeatables_.push_back(task);
       }
@@ -571,13 +644,13 @@ void ShinjukuScheduler::SchedParamsCallback(ShinjukuOrchestrator& orch,
   }
 }
 
-void ShinjukuScheduler::UpdateSchedParams() {
+void FlexScheduler::UpdateSchedParams() {
   for (auto& scraper : orchs_) {
     scraper.second->RefreshSchedParams(kSchedCallbackFunc);
   }
 }
 
-bool ShinjukuScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
+bool FlexScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
   CpuState* cs = cpu_state(cpu);
   // The logic is complex, so we break it into multiple if statements rather
   // than compress it into a single boolean expression that we return
@@ -587,7 +660,7 @@ bool ShinjukuScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
   }
   if (iteration == 0 && cs->current &&
       cs->current->unschedule_level <
-          ShinjukuTask::UnscheduleLevel::kMustUnschedule) {
+          FlexTask::UnscheduleLevel::kMustUnschedule) {
     // Don't preempt the task on this CPU in the first iteration. We first
     // try to see if there is an idle CPU we can run the next task on. The only
     // exception is if the currently running task must be unscheduled... it is
@@ -603,11 +676,50 @@ bool ShinjukuScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
   return false;
 }
 
-void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
+// 分类处理
+// 对于DU，抢占逻辑删除
+void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
                                        StatusWord::BarrierToken agent_sw_last) {
   // List of CPUs with open transactions.
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
+
+  // 重新分配CPU
+  for (auto& [vran_id, empty_time] : vran_empty_times_from_last_schduler_){
+    if(empty_time == 0){
+      // 若有，分配一个新的CPU
+      if(!cpu_assign_vran_id_key_[0].empty()
+        && cpu_assign_vran_id_key_[vran_id].size() < vran_max_cpu_number_[vran_id]){
+        cpu_id_t cpu_id = vran_last_assign_vran_cpus_[vran_id];
+        if(cpu_assign_cpu_key_[cpu_id] == 0){
+          cpu_assign_vran_id_key_[vran_id].insert(cpu_id);
+          cpu_assign_cpu_key_[cpu_id] = vran_id;
+          cpu_assign_vran_id_key_[0].erase(cpu_id);
+        } else {
+          auto it = cpu_assign_vran_id_key_[0].begin();
+          cpu_assign_vran_id_key_[vran_id].insert(*it);
+          cpu_assign_cpu_key_[*it] = vran_id;
+          cpu_assign_vran_id_key_[0].erase(it);
+        }
+      }
+    // 隐含已分配CPU > 1
+    } else if (empty_time > 1){
+      auto it = cpu_assign_vran_id_key_[vran_id].begin();
+      cpu_assign_vran_id_key_[0].insert(*it);
+      cpu_assign_cpu_key_[*it] = 0;
+      cpu_assign_vran_id_key_[vran_id].erase(it);
+    }
+  }
+
+  // vran的task在yelid后直接进入就绪状态，因为此处的yeild实际为劫持函数
+  if (!vran_yielding_tasks_.empty()) {
+    for (FlexTask* t : vran_yielding_tasks_) {
+      CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);
+      Enqueue(t);
+    }
+    vran_yielding_tasks_.clear();
+  }
+
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
     CpuList updated_cpus = MachineTopology()->EmptyCpuList();
@@ -616,6 +728,7 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
       if (SkipForSchedule(i, cpu)) {
         continue;
       }
+      vRAN_id_t vran_id = cpu_assign_cpu_key_[cpu.id()];
 
     again:
       if (cs->current) {
@@ -633,21 +746,22 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
         // not a repeatable.
         // 3. The task's unschedule level is at least `kCouldUnschedule`, making
         // the task eligible for preemption.
-        ShinjukuTask* peek = Peek();
+        FlexTask* peek = Peek(vran_id);
         bool should_preempt = false;
         if (peek) {
           uint32_t current_qos = cs->current->sp->GetQoS();
           uint32_t peek_qos = peek->sp->GetQoS();
 
+          // 当且仅当batch被vran抢占
           if (current_qos < peek_qos) {
             should_preempt = true;
-          } else if (current_qos == peek_qos) {
+          } else if (current_qos == peek_qos && vran_id == 0) {
             if (elapsed_runtime >= preemption_time_slice_ &&
                 cs->current->orch &&
                 !cs->current->orch->Repeating(cs->current->sp)) {
               should_preempt = true;
             } else if (cs->current->unschedule_level >=
-                       ShinjukuTask::UnscheduleLevel::kCouldUnschedule) {
+                       FlexTask::UnscheduleLevel::kCouldUnschedule) {
               should_preempt = true;
             }
           }
@@ -656,7 +770,7 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
           continue;
         }
       }
-      ShinjukuTask* to_run = Dequeue();
+      FlexTask* to_run = Dequeue(vran_id);
       if (!to_run) {
         // No tasks left to schedule.
         break;
@@ -664,8 +778,10 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
 
       // The chosen task was preempted earlier but hasn't gotten off the
       // CPU. Make it ineligible for selection in this scheduling round.
+      // 不应该出现于vran
       if (to_run->status_word.on_cpu()) {
-        Yield(to_run);
+        CHECK(vran_id == 0);
+        Yield(to_run, vran_id);
         goto again;
       }
 
@@ -679,11 +795,11 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
       // Make a copy of the `cs->current` pointer since we need to access the
       // task after it is unscheduled. `UnscheduleTask` sets `cs->current` to
       // `nullptr`.
-      ShinjukuTask* task = cs->current;
+      FlexTask* task = cs->current;
       if (task) {
         if (!cs->next) {
           if (task->unschedule_level ==
-              ShinjukuTask::UnscheduleLevel::kCouldUnschedule) {
+              FlexTask::UnscheduleLevel::kCouldUnschedule) {
             // We set the level to `kNoUnschedule` since no task is being
             // scheduled in place of `task` on `cpu`. We cannot set the level to
             // `kNoUnschedule` when trying to schedule another task on this
@@ -695,9 +811,9 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
             // `kCouldUnschedule`, so we do not initiate an unschedule unlike
             // below for `kMustUnschedule`.
             task->unschedule_level =
-                ShinjukuTask::UnscheduleLevel::kNoUnschedule;
+                FlexTask::UnscheduleLevel::kNoUnschedule;
           } else if (task->unschedule_level ==
-                     ShinjukuTask::UnscheduleLevel::kMustUnschedule) {
+                     FlexTask::UnscheduleLevel::kMustUnschedule) {
             // `task` must be unscheduled and we have no new task schedule to
             // pair the unschedule with, so initiate the unschedule directly.
             UnscheduleTask(task);
@@ -725,14 +841,14 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
         //   initiated an unschedule of `task` above. `UnscheduleTask(task)`
         //   sets the level of `task` to `kNoUnschedule`.
         CHECK(cs->next || task->unschedule_level ==
-                              ShinjukuTask::UnscheduleLevel::kNoUnschedule);
+                              FlexTask::UnscheduleLevel::kNoUnschedule);
       }
     }
 
     for (const Cpu& cpu : updated_cpus) {
       CpuState* cs = cpu_state(cpu);
 
-      ShinjukuTask* next = cs->next;
+      FlexTask* next = cs->next;
       CHECK_NE(next, nullptr);
 
       if (cs->current == next) continue;
@@ -747,24 +863,25 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
       open_cpus.Set(cpu.id());
     }
   }
+
   if (!open_cpus.Empty()) {
     enclave()->CommitRunRequests(open_cpus);
   }
 
   for (const Cpu& cpu : open_cpus) {
     CpuState* cs = cpu_state(cpu);
-    ShinjukuTask* next = cs->next;
+    FlexTask* next = cs->next;
     cs->next = nullptr;
 
     RunRequest* req = enclave()->GetRunRequest(cpu);
     DCHECK(req->committed());
     if (req->state() == GHOST_TXN_COMPLETE) {
       if (cs->current) {
-        ShinjukuTask* prev = cs->current;
+        FlexTask* prev = cs->current;
         CHECK(prev->oncpu());
 
         // The schedule succeeded, so `prev` was unscheduled.
-        prev->unschedule_level = ShinjukuTask::UnscheduleLevel::kNoUnschedule;
+        prev->unschedule_level = FlexTask::UnscheduleLevel::kNoUnschedule;
 
         // Update runtime of the preempted task.
         prev->UpdateRuntime();
@@ -773,12 +890,12 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
         Enqueue(prev);
       }
 
-      // ShinjukuTask latched successfully; clear state from an earlier run.
+      // FlexTask latched successfully; clear state from an earlier run.
       //
       // Note that 'preempted' influences a task's run_queue position
       // so we clear it only after the transaction commit is successful.
       cs->current = next;
-      next->run_state = ShinjukuTask::RunState::kOnCpu;
+      next->run_state = FlexTask::RunState::kOnCpu;
       next->cpu = cpu.id();
       next->preempted = false;
       next->prio_boost = false;
@@ -790,7 +907,7 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
       // Need to requeue in the stale case.
       Enqueue(next, /* back = */ false);
       if (cs->current && cs->current->unschedule_level >=
-                             ShinjukuTask::UnscheduleLevel::kCouldUnschedule) {
+                             FlexTask::UnscheduleLevel::kCouldUnschedule) {
         // TODO: Add a commit option that will idle the CPU if a ghOSt
         // task is currently running on the CPU and a transaction to run a new
         // task on that CPU fails. This will allow us to get the desired
@@ -804,8 +921,8 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
   // Yielding tasks are moved back to the runqueue having skipped one round
   // of scheduling decisions.
   if (!yielding_tasks_.empty()) {
-    for (ShinjukuTask* t : yielding_tasks_) {
-      CHECK_EQ(t->run_state, ShinjukuTask::RunState::kYielding);
+    for (FlexTask* t : yielding_tasks_) {
+      CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);
       Enqueue(t);
     }
     yielding_tasks_.clear();
@@ -813,7 +930,7 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
   // Check to see if any repeatables are eligible to run
   for (auto it = paused_repeatables_.begin();
        it != paused_repeatables_.end();) {
-    ShinjukuTask* task = *it;
+    FlexTask* task = *it;
     CHECK_NE(task->orch, nullptr);
     absl::Duration wait = absl::Now() - task->last_ran;
     if (wait >= task->orch->GetWorkClassPeriod(task->sp->GetWorkClass())) {
@@ -829,13 +946,13 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
   }
 }
 
-void ShinjukuScheduler::PickNextGlobalCPU(
+void FlexScheduler::PickNextGlobalCPU(
     StatusWord::BarrierToken agent_barrier) {
   // TODO: Select CPUs more intelligently.
   for (const Cpu& cpu : cpus()) {
     if (Available(cpu) && cpu.id() != GetGlobalCPUId()) {
       CpuState* cs = cpu_state(cpu);
-      ShinjukuTask* prev = cs->current;
+      FlexTask* prev = cs->current;
 
       if (prev) {
         CHECK(prev->oncpu());
@@ -856,18 +973,19 @@ void ShinjukuScheduler::PickNextGlobalCPU(
   }
 }
 
-std::unique_ptr<ShinjukuScheduler> SingleThreadShinjukuScheduler(
+std::unique_ptr<FlexScheduler> SingleThreadFlexScheduler(
     Enclave* enclave, CpuList cpus, int32_t global_cpu,
+    absl::Duration loop_empty_time_slice,
     absl::Duration preemption_time_slice) {
   auto allocator =
-      std::make_shared<SingleThreadMallocTaskAllocator<ShinjukuTask>>();
-  auto scheduler = absl::make_unique<ShinjukuScheduler>(
+      std::make_shared<SingleThreadMallocTaskAllocator<FlexTask>>();
+  auto scheduler = absl::make_unique<FlexScheduler>(
       enclave, std::move(cpus), std::move(allocator), global_cpu,
-      preemption_time_slice);
+      loop_empty_time_slice, preemption_time_slice);
   return scheduler;
 }
 
-void ShinjukuAgent::AgentThread() {
+void FlexAgent::AgentThread() {
   Channel& global_channel = global_scheduler_->GetDefaultChannel();
   gtid().assign_name("Agent:" + std::to_string(cpu().id()));
   if (verbose() > 1) {
@@ -879,12 +997,6 @@ void ShinjukuAgent::AgentThread() {
   PeriodicEdge debug_out(absl::Seconds(1));
 
   while (!Finished()) {
-    // system_clock::time_point time_point_now = system_clock::now(); // 获取当前时间点
-    // system_clock::duration duration_since_epoch 
-    //     = time_point_now.time_since_epoch(); // 从1970-01-01 00:00:00到当前时间点的时长
-    // time_t microseconds_since_epoch 
-    //     = duration_cast<microseconds>(duration_since_epoch).count(); // 将时长转换为微秒数
-    // fprintf(stderr, "microseconds_since_epoch %ld\n", microseconds_since_epoch);
     StatusWord::BarrierToken agent_barrier = status_word().barrier();
     // Check if we're assigned as the Global agent.
     if (cpu().id() != global_scheduler_->GetGlobalCPUId()) {

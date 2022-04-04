@@ -18,6 +18,7 @@ py_library(
     ],
     data = [
         "//:agent_shinjuku",
+        "//:agent_flex",
         "//:antagonist",
         "//:rocksdb",
     ],
@@ -67,6 +68,19 @@ par_binary(
     name = "shinjuku_shenango",
     srcs = [
         "shinjuku_shenango.py",
+    ],
+    python_version = "PY3",
+    deps = [
+        ":experiments",
+        requirement("absl-py"),
+    ],
+)
+
+# Runs the Shinjuku+Shenango experiments.
+par_binary(
+    name = "flex",
+    srcs = [
+        "flex.py",
     ],
     python_version = "PY3",
     deps = [

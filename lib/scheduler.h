@@ -75,9 +75,11 @@ class Scheduler {
   virtual void EnclaveReady() {}
 
   // Tells the scheduler to discover new tasks from its enclave
+  // 这里理解为线程
   virtual void DiscoverTasks() {}
 
   // All schedulers must have some channel that is "default".
+  // 传递和线程间的message
   virtual Channel& GetDefaultChannel() = 0;
 
   // Returns a (const) pointer to this scheduler's topology.

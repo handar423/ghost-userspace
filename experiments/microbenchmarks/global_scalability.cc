@@ -16,6 +16,7 @@
 #include "absl/flags/usage.h"
 #include "schedulers/edf/edf_scheduler.h"
 #include "schedulers/shinjuku/shinjuku_scheduler.h"
+#include "schedulers/flex/flex_scheduler.h"
 #include "schedulers/sol/sol_scheduler.h"
 
 namespace ghost {
@@ -129,6 +130,16 @@ static void RunShinjuku(ShinjukuConfig cfg, int nr_task_cpus, int nr_threads,
   delete uap;
 }
 
+static void RunFlex(FlexConfig cfg, int nr_task_cpus, int nr_threads,
+                        int nr_loops) {
+  auto uap =
+      new AgentProcess<FullFlexAgent<LocalEnclave>, FlexConfig>(cfg);
+
+  RunThreads(nr_task_cpus, nr_threads, nr_loops);
+
+  delete uap;
+}
+
 static void RunSol(SolConfig cfg, int nr_task_cpus, int nr_threads,
                    int nr_loops) {
   auto uap = new AgentProcess<FullSolAgent<LocalEnclave>, SolConfig>(cfg);
@@ -227,9 +238,10 @@ enum class Sched {
   kEdf,
   kShinjuku,
   kSol,
+  kFlex,
 };
 static Sched sched_type;
-static const char usage[] = "edf|shinjuku|sol";
+static const char usage[] = "edf|shinjuku|sol|flex";
 
 int main(int argc, char* argv[]) {
   absl::SetProgramUsageMessage(usage);
@@ -261,6 +273,8 @@ int main(int argc, char* argv[]) {
     sched_type = Sched::kShinjuku;
   } else if (!strcmp(pos_args[1], "sol")) {
     sched_type = Sched::kSol;
+  } else if (!strcmp(pos_args[1], "flex")) {
+    sched_type = Sched::kFlex;
   } else {
     fprintf(stderr, "Unrecognized scheduler '%s'\n", pos_args[1]);
     exit(1);
@@ -301,6 +315,12 @@ int main(int argc, char* argv[]) {
         ghost::ShinjukuConfig cfg(t, cpus, t->cpu(global_cpu));
         cfg.preemption_time_slice_ = absl::Microseconds(50),
         ghost::RunShinjuku(cfg, nr_task_cpus, nr_threads, nr_loops);
+        break;
+      }
+      case Sched::kFlex: {
+        ghost::FlexConfig cfg(t, cpus, t->cpu(global_cpu));
+        cfg.preemption_time_slice_ = absl::Microseconds(50),
+        ghost::RunFlex(cfg, nr_task_cpus, nr_threads, nr_loops);
         break;
       }
       case Sched::kSol: {

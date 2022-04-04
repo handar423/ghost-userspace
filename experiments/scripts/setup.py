@@ -134,11 +134,15 @@ def CopyBinaries(paths: Paths):
   Args:
     paths: The paths to copy the RocksDB, Antagonist, and ghOSt binaries to.
   """
-  tmp = UnzipPar()
-  CopyBinary(tmp.name + "/com_google_ghost/rocksdb", paths.rocksdb)
-  CopyBinary(tmp.name + "/com_google_ghost/antagonist", paths.antagonist)
-  CopyBinary(tmp.name + "/com_google_ghost/agent_shinjuku", paths.ghost)
-  tmp.cleanup()
+  # tmp = UnzipPar()
+  # CopyBinary(tmp.name + "/com_google_ghost/rocksdb", paths.rocksdb)
+  # CopyBinary(tmp.name + "/com_google_ghost/antagonist", paths.antagonist)
+  # CopyBinary(tmp.name + "/com_google_ghost/agent_shinjuku", paths.ghost)
+  # tmp.cleanup()
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/rocksdb", paths.rocksdb)
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/antagonist", paths.antagonist)
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/agent_shinjuku", paths.ghost)
+
 
 
 # TODO: Disable MSV fixing.
