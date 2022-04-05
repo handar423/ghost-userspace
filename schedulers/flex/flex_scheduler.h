@@ -239,19 +239,6 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     const Agent* agent = nullptr;
   } ABSL_CACHELINE_ALIGNED;
 
-  // struct VranInfo {
-  //   absl::flat_hash_map<vRAN_id_t, absl::flat_hash_set<cpu_id_t>> cpu_assign_vran_id_key_;
-
-  //   // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
-  //   absl::flat_hash_map<vRAN_id_t, cpu_id_t> vran_last_assign_vran_cpus_;
-
-  //   // 每一类vRAN上一轮为空次数
-  //   std::map<vRAN_id_t, uint32_t> vran_empty_times_from_last_schduler_;
-
-  //   // 每一类vRAN分配CPU上限
-  //   absl::flat_hash_map<vRAN_id_t, uint32_t> vran_max_cpu_number_;
-  // }
-
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
   // currently running on a CPU.
   void UnscheduleTask(FlexTask* task);
