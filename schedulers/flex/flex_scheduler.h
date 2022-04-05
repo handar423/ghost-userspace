@@ -283,15 +283,9 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
   CpuState* cpu_state(const Cpu& cpu) { return &cpu_states_[cpu.id()]; }
 
-  size_t RunqueueSize() const {
-    size_t size = 0;
-    for (const auto& [qos, rq] : run_queue_) {
-      size += rq.size();
-    }
-    return size;
-  }
+  size_t RunqueueSize(vRAN_id_t vran_id);
 
-  bool RunqueueEmpty() const { return RunqueueSize() == 0; }
+  bool RunqueueEmpty(vRAN_id_t vran_id) { return RunqueueSize(vran_id) == 0; }
 
   // Returns the highest-QoS runqueue that has at least one task enqueued.
   // Must call this on a non-empty runqueue.
@@ -374,7 +368,7 @@ class FlexAgent : public Agent {
 class FlexConfig : public AgentConfig {
  public:
   FlexConfig() {}
-  FlexConfig(Topology* topology, CpuList cpus, Cpu global_cpu, )
+  FlexConfig(Topology* topology, CpuList cpus, Cpu global_cpu)
       : AgentConfig(topology, cpus), global_cpu_(global_cpu) {}
 
   Cpu global_cpu_{Cpu::UninitializedType::kUninitialized};

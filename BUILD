@@ -986,3 +986,37 @@ cc_binary(
     linkshared = True,
     linkstatic = True,
 ) 
+
+cc_binary(
+    name = "rocksdb_single",
+    srcs = [
+        "experiments/rocksdb_single/cfs_orchestrator.cc",
+        "experiments/rocksdb_single/cfs_orchestrator.h",
+        "experiments/rocksdb_single/clock.h",
+        "experiments/rocksdb_single/database.cc",
+        "experiments/rocksdb_single/database.h",
+        "experiments/rocksdb_single/ghost_orchestrator.cc",
+        "experiments/rocksdb_single/ghost_orchestrator.h",
+        "experiments/rocksdb_single/ingress.cc",
+        "experiments/rocksdb_single/ingress.h",
+        "experiments/rocksdb_single/latency.cc",
+        "experiments/rocksdb_single/latency.h",
+        "experiments/rocksdb_single/main.cc",
+        "experiments/rocksdb_single/orchestrator.cc",
+        "experiments/rocksdb_single/orchestrator.h",
+        "experiments/rocksdb_single/request.h",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    deps = [
+        ":base",
+        ":experiments_shared",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/functional:bind_front",
+        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/random:bit_gen_ref",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@rocksdb",
+    ],
+)

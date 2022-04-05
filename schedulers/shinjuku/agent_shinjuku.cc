@@ -75,6 +75,9 @@ void ParseShinjukuConfig(ShinjukuConfig* config) {
 }  // namespace ghost
 
 int main(int argc, char* argv[]) {
+  ghost::Ghost::SchedSetAffinity(
+                ghost::Gtid::Current(), ghost::MachineTopology()->all_cores());
+                
   absl::InitializeSymbolizer(argv[0]);
 
   // Override default value of the verbose flag while in active development.

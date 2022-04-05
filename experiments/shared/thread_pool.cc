@@ -30,11 +30,13 @@ void ExperimentThreadPool::Init(
   CHECK_EQ(ksched.size(), num_threads_);
   CHECK_EQ(ksched.size(), thread_work.size());
 
+  // printf("ExperimentThreadPool Init num_threads_ %d\n", num_threads_);
   threads_.reserve(num_threads_);
   for (uint32_t i = 0; i < num_threads_; i++) {
     threads_.push_back(std::make_unique<ghost::GhostThread>(
         ksched[i],
         std::bind(&ExperimentThreadPool::ThreadMain, this, i, thread_work[i])));
+    // printf("threads_ %d start\n", i);
   }
 }
 
@@ -44,9 +46,11 @@ void ExperimentThreadPool::MarkExit(uint32_t sid) {
 
 void ExperimentThreadPool::ThreadMain(
     uint32_t i, std::function<void(uint32_t)> thread_work) {
+  // printf("ThreadMain %d\n", i);
   while (!ShouldExit(i)) {
     thread_work(i);
   }
+  // printf("ShouldExit %d\n", i);
   num_exited_.fetch_add(1, std::memory_order_release);
 }
 

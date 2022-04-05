@@ -19,10 +19,15 @@
 // 单位纳秒
 #define VRAN_EMPTY_FLAG 1000
 
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+
 namespace ghost {
 
 inline vRAN_id_t get_task_vran_id(FlexTask* task){
-  return task->sp->GetQoS() & VRAN_ID_MASK;
+  vRAN_id_t vran_id = task->sp == nullptr ? 0 : task->sp->GetQoS() & VRAN_ID_MASK;
+  // fprintf(stderr, "get_task_vran_id %p %d\n", task->sp, vran_id);
+  return vran_id;
 }
 
 void FlexTask::SetRuntime(absl::Duration new_runtime,
@@ -66,7 +71,7 @@ FlexScheduler::FlexScheduler(
 
   for (const Cpu& cpu : cpus) {
     cpu_assign_cpu_key_[cpu.id()] = 0;
-    cpu_assign_vran_id_key_[0].emplace_back(cpu.id());
+    cpu_assign_vran_id_key_[0].insert(cpu.id());
   }
   // 防止在后续调用cpu_assign_cpu_key_[0]时有误
   cpu_assign_cpu_key_[0] = -1;
@@ -75,6 +80,15 @@ FlexScheduler::FlexScheduler(
 }
 
 FlexScheduler::~FlexScheduler() {}
+
+size_t FlexScheduler::RunqueueSize(vRAN_id_t vran_id) {
+  if (vran_id) return run_queue_[vran_id].size();
+  size_t size = 0;
+  for (const auto& [qos, rq] : run_queue_) {
+    size += ((qos & VRAN_ID_MASK) == 0) ? rq.size() : 0;
+  }
+  return size;
+}
 
 void FlexScheduler::EnclaveReady() {
   for (const Cpu& cpu : cpus()) {
@@ -106,14 +120,18 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
     DumpAllTasks();
   }
 
-  if (!(flags & kDumpStateEmptyRQ) && RunqueueEmpty()) {
+  uint32_t total_queue_size = 0;
+  for(auto& [qos, rq] : run_queue_){
+    total_queue_size += rq.size();
+  }
+  if (!(flags & kDumpStateEmptyRQ) && total_queue_size == 0) {
     return;
   }
 
   fprintf(stderr, "SchedState: ");
   for (const Cpu& cpu : cpus()) {
     CpuState* cs = cpu_state(cpu);
-    fprintf(stderr, "%d:", cpu.id());
+    fprintf(stderr, "%d(vran_id %u):", cpu.id(), cpu_assign_cpu_key_[cpu.id()]);
     if (!cs->current) {
       fprintf(stderr, "none ");
     } else {
@@ -121,7 +139,10 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
       absl::FPrintF(stderr, "%s ", gtid.describe());
     }
   }
-  fprintf(stderr, " rq_l=%ld", RunqueueSize());
+  fprintf(stderr, " rq_l(vran_id 0)=%ld", RunqueueSize(0));
+  for(auto& [vran_id, _] : vran_empty_times_from_last_schduler_)
+    fprintf(stderr, " rq_l(vran_id %u)=%ld", vran_id, RunqueueSize(0));
+  
   fprintf(stderr, "\n");
 }
 
@@ -186,25 +207,6 @@ void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
   const pid_t tgid = gtid.tgid();
   HandleNewGtid(task, tgid);
 
-  // 为对应的VRAN增加CPU分配上限
-  uint32_t vran_id = get_task_vran_id(task);
-  if(vran_max_cpu_number_.count(vran_id) == 0){
-    vran_max_cpu_number_[vran_id] = 1;
-    vran_empty_times_from_last_schduler_[vran_id] = 0;
-    vran_last_assign_vran_cpus_[vran_id] = 0;
-  } else {
-    vran_max_cpu_number_[vran_id] += 1;
-  }
-
-  // 若有，分配一个新的CPU
-  if(!cpu_assign_vran_id_key_[0].empty()){
-    auto it = cpu_assign_vran_id_key_[0].begin();
-    cpu_assign_vran_id_key_[vran_id].insert(*it);
-    cpu_assign_cpu_key_[*it] = vran_id;
-    cpu_assign_vran_id_key_[0].erase(it);
-  }
-
-
   if (payload->runnable) Enqueue(task);
     
   num_tasks_++;
@@ -223,6 +225,7 @@ void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
     // in the runqueue).
     task->orch->GetSchedParams(task->gtid, kSchedCallbackFunc);
   }
+
 }
 
 void FlexScheduler::TaskRunnable(FlexTask* task, const Message& msg) {
@@ -244,6 +247,27 @@ void FlexScheduler::TaskDeparted(FlexTask* task, const Message& msg) {}
 void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   CHECK_EQ(task->run_state,
            FlexTask::RunState::kBlocked);  // Need to schedule to exit.
+
+  uint32_t vran_id = get_task_vran_id(task);
+  // fprintf(stderr, "one vran %d task end\n", vran_id);
+  if (vran_id){
+    if(vran_max_cpu_number_[vran_id] == 1){
+      // fprintf(stderr, "no vran %d task left\n", vran_id);
+      vran_max_cpu_number_.erase(vran_id);
+      vran_empty_times_from_last_schduler_.erase(vran_id);
+      vran_last_assign_vran_cpus_.erase(vran_id);
+      for(auto cpu : cpus()){
+        if(cpu_assign_cpu_key_[cpu.id()] == vran_id){
+          cpu_assign_cpu_key_[cpu.id()] = 0;
+          cpu_assign_vran_id_key_[0].insert(cpu.id());
+        }
+      }
+    } else {
+      vran_max_cpu_number_[vran_id] -= 1;
+      // fprintf(stderr, "%d vran %d task left\n", vran_max_cpu_number_[vran_id], vran_id);
+    }
+  }
+
   allocator()->FreeTask(task);
 
   num_tasks_--;
@@ -326,7 +350,10 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   uint32_t vran_id = get_task_vran_id(task);
   // 两者单位一致，此处不处理
   if(vran_id != 0 && payload->runtime < VRAN_EMPTY_FLAG){
+    printf("vran %d empty one time\n", vran_id);
     vran_empty_times_from_last_schduler_[vran_id] += 1;
+  } else {
+    printf("vran %d get task one time\n", vran_id);
   }
 
   // States other than the typical kOnCpu are possible here:
@@ -403,7 +430,7 @@ void FlexScheduler::Enqueue(FlexTask* task, bool back) {
 
 // 等于0时行为等于普通的Dequeue
 FlexTask* FlexScheduler::Dequeue(vRAN_id_t vran_id) {
-  if (RunqueueEmpty()) {
+  if (RunqueueEmpty(vran_id)) {
     return nullptr;
   }
   struct FlexTask* task = nullptr;
@@ -411,22 +438,27 @@ FlexTask* FlexScheduler::Dequeue(vRAN_id_t vran_id) {
   if(vran_id == 0){
     std::deque<FlexTask*>& rq = run_queue_[FirstFilledRunqueue()];
     task = rq.front();
+    CHECK_NE(task, nullptr);
+    CHECK(task->has_work);
+    CHECK_EQ(task->unschedule_level,
+            FlexTask::UnscheduleLevel::kNoUnschedule);
+    rq.pop_front();
   } else {
     std::deque<FlexTask*>& rq = run_queue_[vran_id];
     task = rq.front();
+    CHECK_NE(task, nullptr);
+    CHECK(task->has_work);
+    CHECK_EQ(task->unschedule_level,
+            FlexTask::UnscheduleLevel::kNoUnschedule);
+    rq.pop_front();
   }
-  CHECK_NE(task, nullptr);
-  CHECK(task->has_work);
-  CHECK_EQ(task->unschedule_level,
-           FlexTask::UnscheduleLevel::kNoUnschedule);
-  rq.pop_front();
 
   return task;
 }
 
 // 等于0时行为等于普通的Peek
 FlexTask* FlexScheduler::Peek(vRAN_id_t vran_id) {
-  if (RunqueueEmpty()) {
+  if (RunqueueEmpty(vran_id)) {
     return nullptr;
   }
   struct FlexTask* task = nullptr;
@@ -524,6 +556,28 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
 
   // Copy updated params into task->..
   const bool had_work = task->has_work;
+
+  // 为对应的VRAN增加CPU分配上限
+  if(unlikely(task->sp == nullptr && (sp->GetQoS() & VRAN_ID_MASK))) {
+    uint32_t vran_id = sp->GetQoS() & VRAN_ID_MASK;
+    // fprintf(stderr, "find new vran %d task\n", vran_id);
+    if(vran_max_cpu_number_.count(vran_id) == 0){
+      vran_max_cpu_number_[vran_id] = 1;
+      vran_empty_times_from_last_schduler_[vran_id] = 0;
+      vran_last_assign_vran_cpus_[vran_id] = 0;
+    } else {
+      vran_max_cpu_number_[vran_id] += 1;
+    }
+    // fprintf(stderr, "have find %d vran %d task\n", vran_max_cpu_number_[vran_id], vran_id);
+
+    // 若有，分配一个新的CPU
+    if(cpu_assign_vran_id_key_[0].size() > 1){
+      auto it = cpu_assign_vran_id_key_[0].begin();
+      cpu_assign_vran_id_key_[vran_id].insert(*it);
+      cpu_assign_cpu_key_[*it] = vran_id;
+      cpu_assign_vran_id_key_[0].erase(it);
+    }
+  }
   task->sp = sp;
   task->has_work = sp->HasWork();
   task->wcid = sp->GetWorkClass();
@@ -688,7 +742,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   for (auto& [vran_id, empty_time] : vran_empty_times_from_last_schduler_){
     if(empty_time == 0){
       // 若有，分配一个新的CPU
-      if(!cpu_assign_vran_id_key_[0].empty()
+      if(cpu_assign_vran_id_key_[0].size() > 1
         && cpu_assign_vran_id_key_[vran_id].size() < vran_max_cpu_number_[vran_id]){
         cpu_id_t cpu_id = vran_last_assign_vran_cpus_[vran_id];
         if(cpu_assign_cpu_key_[cpu_id] == 0){
@@ -709,9 +763,10 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       cpu_assign_cpu_key_[*it] = 0;
       cpu_assign_vran_id_key_[vran_id].erase(it);
     }
+    empty_time = 0;
   }
 
-  // vran的task在yelid后直接进入就绪状态，因为此处的yeild实际为劫持函数
+  // vran的task在yield后直接进入就绪状态，因为此处的yield实际为劫持函数
   if (!vran_yielding_tasks_.empty()) {
     for (FlexTask* t : vran_yielding_tasks_) {
       CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);

@@ -16,9 +16,9 @@
 #include <csignal>
 
 #include "absl/flags/parse.h"
-#include "experiments/rocksdb/cfs_orchestrator.h"
-#include "experiments/rocksdb/ghost_orchestrator.h"
-#include "experiments/rocksdb/orchestrator.h"
+#include "experiments/rocksdb_single/cfs_orchestrator.h"
+#include "experiments/rocksdb_single/ghost_orchestrator.h"
+#include "experiments/rocksdb_single/orchestrator.h"
 
 ABSL_FLAG(std::string, print_format, "pretty",
           "Results print format (\"pretty\" or \"csv\", default: \"pretty\")");

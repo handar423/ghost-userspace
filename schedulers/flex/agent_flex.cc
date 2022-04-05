@@ -83,6 +83,7 @@ void ParseFlexConfig(FlexConfig* config) {
 }  // namespace ghost
 
 int main(int argc, char* argv[]) {
+
   absl::InitializeSymbolizer(argv[0]);
 
   // Override default value of the verbose flag while in active development.
@@ -105,6 +106,8 @@ int main(int argc, char* argv[]) {
   printf("Initializing...\n");
 
   // Using new so we can destruct the object before printing Done
+  ghost::Ghost::SchedSetAffinity(
+                ghost::Gtid::Current(), ghost::MachineTopology()->all_cores());
   auto uap =
       new ghost::AgentProcess<ghost::FullFlexAgent<ghost::LocalEnclave>,
                               ghost::FlexConfig>(config);

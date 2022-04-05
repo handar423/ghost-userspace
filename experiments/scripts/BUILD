@@ -21,6 +21,7 @@ py_library(
         "//:agent_flex",
         "//:antagonist",
         "//:rocksdb",
+        "//:rocksdb_single",
     ],
 )
 
