@@ -48,3 +48,7 @@ dequeue的时候再task queue间轮训
 -->> 明天
 
 遗留一个问题：如何支持batch app
+
+现在需要加上：
+    多task queue问题
+    单独loop overhead太大:blocked直接返回

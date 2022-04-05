@@ -17,18 +17,18 @@
 #include "absl/strings/str_format.h"
 
 // 单位纳秒
-#define VRAN_EMPTY_FLAG 1000
+#define VRAN_EMPTY_FLAG 10000
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
 namespace ghost {
 
-inline vRAN_id_t get_task_vran_id(FlexTask* task){
-  vRAN_id_t vran_id = task->sp == nullptr ? 0 : task->sp->GetQoS() & VRAN_ID_MASK;
+// inline vRAN_id_t get_task_vran_id(FlexTask* task){
+//   return task->sp->GetQoS() & VRAN_ID_MASK;
   // fprintf(stderr, "get_task_vran_id %p %d\n", task->sp, vran_id);
-  return vran_id;
-}
+  // return vran_id;
+// }
 
 void FlexTask::SetRuntime(absl::Duration new_runtime,
                               bool update_elapsed_runtime) {
@@ -75,8 +75,6 @@ FlexScheduler::FlexScheduler(
   }
   // 防止在后续调用cpu_assign_cpu_key_[0]时有误
   cpu_assign_cpu_key_[0] = -1;
-
-  last_global_scheduler_time = absl::Now();
 }
 
 FlexScheduler::~FlexScheduler() {}
@@ -248,7 +246,7 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   CHECK_EQ(task->run_state,
            FlexTask::RunState::kBlocked);  // Need to schedule to exit.
 
-  uint32_t vran_id = get_task_vran_id(task);
+  uint32_t vran_id = task->vran_id;
   // fprintf(stderr, "one vran %d task end\n", vran_id);
   if (vran_id){
     if(vran_max_cpu_number_[vran_id] == 1){
@@ -280,11 +278,15 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
 
   DCHECK_EQ(payload->runtime, task->status_word.runtime());
 
-  uint32_t vran_id = get_task_vran_id(task);
+  uint32_t vran_id = task->vran_id;
   // 两者单位一致，此处不处理
-  if(vran_id != 0 && payload->runtime < VRAN_EMPTY_FLAG){
+  uint64_t last_ran = payload->runtime - task->last_runtime;
+  if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
     vran_empty_times_from_last_schduler_[vran_id] += 1;
   }
+  task->last_runtime = payload->runtime;
+  // printf("vran %d one task time %ld\n", vran_id, last_ran);
+
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -347,14 +349,14 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
 
   DCHECK_EQ(payload->runtime, task->status_word.runtime());
   
-  uint32_t vran_id = get_task_vran_id(task);
+  uint32_t vran_id = task->vran_id;
   // 两者单位一致，此处不处理
-  if(vran_id != 0 && payload->runtime < VRAN_EMPTY_FLAG){
-    printf("vran %d empty one time\n", vran_id);
+  uint64_t last_ran = payload->runtime - task->last_runtime;
+  if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
     vran_empty_times_from_last_schduler_[vran_id] += 1;
-  } else {
-    printf("vran %d get task one time\n", vran_id);
   }
+  task->last_runtime = payload->runtime;
+  // printf("vran %d one task time %ld\n", vran_id, last_ran);
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -568,6 +570,8 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     } else {
       vran_max_cpu_number_[vran_id] += 1;
     }
+
+    task->vran_id = vran_id;
     // fprintf(stderr, "have find %d vran %d task\n", vran_max_cpu_number_[vran_id], vran_id);
 
     // 若有，分配一个新的CPU
@@ -758,9 +762,11 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       }
     // 隐含已分配CPU > 1
     } else if (empty_time > 1){
+      // fprintf(stderr, "remove cpu %d\n", empty_time);
       auto it = cpu_assign_vran_id_key_[vran_id].begin();
       cpu_assign_vran_id_key_[0].insert(*it);
       cpu_assign_cpu_key_[*it] = 0;
+      vran_last_assign_vran_cpus_[vran_id] = *it;
       cpu_assign_vran_id_key_[vran_id].erase(it);
     }
     empty_time = 0;

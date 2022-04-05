@@ -39,7 +39,7 @@ class FlexSchedParams {
   inline bool HasWork() const { return flags_ & SCHED_ITEM_RUNNABLE; }
   inline uint32_t GetFlags() { return flags_; }
   inline uint32_t GetSeqCount() { return seqcount_; }
-  inline uint32_t GetSID() { return sid_; }
+  inline uint32_t GetSID() const { return sid_; }
 
   inline uint32_t GetWorkClass() const { return wcid_; }
   inline Gtid GetGtid() const { return Gtid(gpid_); }
