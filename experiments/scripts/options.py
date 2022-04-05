@@ -200,7 +200,7 @@ class RocksDBOptions:
   experiment_duration: str = "15s"
   discard_duration: str = "2s"
   scheduler: Scheduler = Scheduler.CFS
-  ghost_qos: int = 2
+  ghost_qos: int = 16
 
 
 @dataclass
@@ -298,7 +298,7 @@ def GetRocksDBOptions(scheduler: Scheduler, num_cpus: int, num_workers: int):
     # Only the load generator is pinned to a CPU and scheduled with CFS for the
     # ghOSt experiments. The CPU constraints for the global agent and the worker
     # threads are determined by the ghOSt process.
-    r.worker_cpus = list(range(_FIRST_CPU, _FIRST_CPU + num_cpus))
+    r.worker_cpus = []
   return r
 
 

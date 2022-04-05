@@ -964,10 +964,8 @@ cc_binary(
     srcs = [
         "experiments/hijack/ghost_status.h",
         "experiments/hijack/ghost_status.cc",
-        "experiments/hijack/nanosleep_op.h",
-        "experiments/hijack/nanosleep_op.cc",
-        "experiments/hijack/usleep_op.h",
-        "experiments/hijack/usleep_op.cc",
+        "experiments/hijack/sem_wait.cc",
+        "experiments/hijack/sem_wait.h",
     ],
     deps = [
         ":base",
@@ -985,7 +983,7 @@ cc_binary(
     ],
     linkshared = True,
     linkstatic = True,
-) 
+)
 
 cc_binary(
     name = "rocksdb_single",

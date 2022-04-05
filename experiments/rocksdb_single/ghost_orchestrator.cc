@@ -251,6 +251,8 @@ void GhostOrchestrator::Worker(uint32_t sid) {
     // No more requests waiting in the ingress queue, so give the
     // requests we have so far to the worker.
     // queue_mutex.unlock();
+    // fprintf(stderr, "empty loop\n");
+    sched_yield();
     return;
   }
   // queue_mutex.unlock();
@@ -267,7 +269,7 @@ void GhostOrchestrator::Worker(uint32_t sid) {
   // runnable again. See the comments above in 'LoadGenerator' for more details
   // about the race condition this prevents.
   // work->num_requests.store(0, std::memory_order_release);
-  sched_yield();
+  // sched_yield();
   // ghost_.WaitUntilRunnable(sid);
 }
 

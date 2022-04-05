@@ -17,6 +17,7 @@
 #include "absl/functional/bind_front.h"
 #include <map>
 #include <time.h>
+#include <semaphore.h>
 
 namespace ghost_test {
 
@@ -154,13 +155,6 @@ absl::Duration Orchestrator::GetThreadCpuTime() const {
 }
 
 void Orchestrator::HandleGet(Request& request, absl::BitGen& gen) {
-  // struct timespec ts1, ts2;
-  // static int i = 0;
-  // i++;
-  // if (i % 1000 == 0){
-  //   clock_gettime(CLOCK_REALTIME,&ts1);
-  // }
-
   CHECK(request.IsGet());
 
   absl::Duration start_duration = GetThreadCpuTime();
@@ -169,15 +163,9 @@ void Orchestrator::HandleGet(Request& request, absl::BitGen& gen) {
     service_time +=
         Request::GetExponentialHandleTime(gen, options_.get_exponential_mean);
   }
-
-  // if (i % 1000 == 0){
-  //   clock_gettime(CLOCK_REALTIME,&ts2);
-  //   fprintf(stderr, "microsecond:%ld\n",ts2.tv_sec*1000000000+ts2.tv_nsec - ts1.tv_sec*1000000000-ts1.tv_nsec);  //微秒
-  // }
-
   std::string response;
   Request::Get& get = std::get<Request::Get>(request.work);
-  // CHECK(database_.Get(get.entry, response));
+  //CHECK(database_.Get(get.entry, response));
 
   absl::Duration now_duration = GetThreadCpuTime();
   if (now_duration - start_duration < service_time) {
@@ -194,7 +182,7 @@ void Orchestrator::HandleRange(Request& request, absl::BitGen& gen) {
 
   std::string response;
   Request::Range& range = std::get<Request::Range>(request.work);
-  // CHECK(database_.RangeQuery(range.start_entry, range.size, response));
+  //CHECK(database_.RangeQuery(range.start_entry, range.size, response));
 
   absl::Duration now_duration = GetThreadCpuTime();
   if (now_duration - start_duration < service_time) {
@@ -287,10 +275,6 @@ void Orchestrator::InitThreadPool() {
 }
 
 void Orchestrator::Terminate() {
-  static struct timespec req;
-  req.tv_sec = 2;
-  req.tv_nsec = 0;
-
   const absl::Duration runtime = absl::Now() - start();
   // Do this check after calculating 'runtime' to avoid inflating 'runtime'.
   CHECK_GT(start(), absl::UnixEpoch());
@@ -311,15 +295,14 @@ void Orchestrator::Terminate() {
     // for (size_t i = 0; i < options().num_workers; ++i) {
     //   // We start at SID 1 (the first worker) since the load generator (SID 0)
     //   // is not scheduled by ghOSt and is always runnable.
-    //   req.tv_nsec = i + 1;
-    //   // nanosleep(&req, NULL);
+    //   req.tv_nsec = i;
+    //   nanosleep(&req, NULL);
     // }
     // fprintf(stderr, "last %d thread!\n", thread_pool().NumExited());
   }
 
   PrintResults(runtime);
   thread_pool().Join();
-  
 }
 
 void Orchestrator::GetIdleWorkerSIDs() {
@@ -335,11 +318,6 @@ void Orchestrator::GetIdleWorkerSIDs() {
 }
 
 void Orchestrator::LoadGenerator(uint32_t sid) {
-
-  static struct timespec req;
-  req.tv_sec = 0;
-  req.tv_nsec = 0;
-
   if (!first_run().Triggered(sid)) {
     CHECK(first_run().Trigger(sid));
     cpu_set_t cpuset = ghost::Topology::ToCpuSet(ghost::MachineTopology()->ToCpuList(std::vector<int>{
@@ -408,72 +386,30 @@ void Orchestrator::LoadGenerator(uint32_t sid) {
 }
 
 void Orchestrator::Worker(uint32_t sid) {
-  static struct timespec req;
-  req.tv_sec = 1;
-  req.tv_nsec = 0;
   if (!first_run().Triggered(sid)) {
     CHECK(first_run().Trigger(sid));
     printf("Worker (SID %u, TID: %ld, not affined to any CPU)\n", sid,
            syscall(SYS_gettid));
   }
 
-  // WorkerWork* work = worker_work()[sid].get();
-
-  // size_t num_requests = work->num_requests.load(std::memory_order_acquire);
-  // if (num_requests == 0) {
-  //   // The worker might only be first scheduled when the process is exiting (so
-  //   // the worker does not have any requests to schedule). This if block
-  //   // captures that case.
-  //   // req.tv_nsec = sid;
-  //   // fprintf(stderr, "nanosleep worker %d empty queue\n", sid);
-  //   // nanosleep(&req, NULL);
-  //   // fprintf(stderr, "return nanosleep worker %d empty queue\n", sid);
-  //   return;
-  // }
-
-  // CHECK_LE(num_requests, options().batch);
-  // CHECK_EQ(num_requests, work->requests.size());
-
-  // for (size_t i = 0; i < num_requests; ++i) {
-  //   Request& request = work->requests[i];
-  //   //fprintf(stderr, "worker %d deal task\n", sid);
-  //   request.request_start = absl::Now();
-  //   HandleRequest(request, gen()[sid]);
-  //   // fprintf(stderr, "worker %d deal task finish\n", sid);
-  //   request.request_finished = absl::Now();
-    
-
-  //   requests()[sid].push_back(request);
-  // }
   Request request;
   queue_mutex.lock();
   if (network().Poll(request)) {
     request.request_assigned = absl::Now();
   } else {
-    // No more requests waiting in the ingress queue, so give the
-    // requests we have so far to the worker.
+    // No more requests waiting in the ingress queue
+    // printf("no more work in network");
     queue_mutex.unlock();
+
+    // hijack point
+    sem_wait(NULL);
     return;
   }
   queue_mutex.unlock();
-  request.request_start = request.request_assigned = absl::Now();
+  request.request_assigned = request.request_start = absl::Now();
   HandleRequest(request, gen()[sid]);
   request.request_finished = absl::Now();
   requests()[sid].push_back(request);
-
-
-  // Set 'num_requests' to 0 before calling 'ghost_.MarkIdle' since the worker
-  // could be descheduled by ghOSt at any time after calling 'ghost_.MarkIdle'
-  // (or even before returning from 'ghost_.MarkIdle'!). The load generator
-  // checks to make sure that a worker with 'num_requests' set to 0 has also
-  // marked itself idle in ghOSt before assigning more work to it and marking it
-  // runnable again. See the comments above in 'LoadGenerator' for more details
-  // about the race condition this prevents.
-  // work->num_requests.store(0, std::memory_order_release);
-  // req.tv_nsec = sid;
-  // fprintf(stderr, "nanosleep worker %d\n", sid);
-  // nanosleep(&req, NULL);
-  // fprintf(stderr, "return nanosleep worker %d %ld\n", sid, work->num_requests.load(std::memory_order_acquire));
 }
 
 }  // namespace ghost_test

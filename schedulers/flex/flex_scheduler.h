@@ -31,6 +31,8 @@
 namespace ghost {
 
 #define VRAN_ID_MASK 0xF0
+#define MAX_VRAN_NUMBER 0x10
+#define VRAN_INDEX_OFFSET 4
 
 typedef uint32_t vRAN_id_t;
 typedef int32_t cpu_id_t;
@@ -239,6 +241,21 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     const Agent* agent = nullptr;
   } ABSL_CACHELINE_ALIGNED;
 
+  struct VranInfo {
+    bool available = false;
+
+    // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
+    cpu_id_t last_assign_cpus_;
+
+    // 每一类vRAN上一轮为空次数
+    uint32_t empty_times_from_last_schduler_;
+
+    // 每一类vRAN分配CPU上限
+    uint32_t max_cpu_number_;
+
+    std::vector<cpu_id_t> cpu_assigns_;
+  };
+
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
   // currently running on a CPU.
   void UnscheduleTask(FlexTask* task);
@@ -334,18 +351,12 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   const absl::Duration preemption_time_slice_;
 
   // CPU和FlexRAN/Batch的对应关系
-  // 这里是按数位计的，存在4个空bit
-  absl::flat_hash_map<cpu_id_t, vRAN_id_t> cpu_assign_cpu_key_;
-  absl::flat_hash_map<vRAN_id_t, absl::flat_hash_set<cpu_id_t>> cpu_assign_vran_id_key_;
+  // 这里是按数位计的，存在4个空bit，用的时候把空位去除
+  std::vector<vRAN_id_t> cpu_assign_cpu_key_;
+  
+  std::vector<VranInfo> vrans_;
 
-  // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
-  absl::flat_hash_map<vRAN_id_t, cpu_id_t> vran_last_assign_vran_cpus_;
-
-  // 每一类vRAN上一轮为空次数
-  std::map<vRAN_id_t, uint32_t> vran_empty_times_from_last_schduler_;
-
-  // 每一类vRAN分配CPU上限
-  absl::flat_hash_map<vRAN_id_t, uint32_t> vran_max_cpu_number_;
+  absl::flat_hash_set<cpu_id_t> batch_app_assigned_cpu_;
 };
 
 // Initializes the task allocator and the Flex scheduler.

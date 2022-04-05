@@ -44,7 +44,9 @@ void ExperimentThreadPool::MarkExit(uint32_t sid) {
 void ExperimentThreadPool::ThreadMain(
     uint32_t i, std::function<void(uint32_t)> thread_work) {
   // 模拟一些可入侵的函数
+  // printf("thread %d before entering usleep\n", i);
   // usleep(i + 1);
+  // printf("thread %d after entering usleep\n", i);
   // if(i == 0)
   //   sleep(1);
   while (!ShouldExit(i)) {

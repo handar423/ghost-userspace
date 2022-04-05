@@ -192,7 +192,8 @@ int main(int argc, char* argv[]) {
   // Affine the main thread to CPU
   cpu_set_t cpuset = ghost::Topology::ToCpuSet(ghost::MachineTopology()->ToCpuList(std::vector<int>{
                      ghost_test::Orchestrator::kBackgroundThreadCpu}));
-  sched_setaffinity(0, sizeof(cpuset), &cpuset);
+  ghost::Ghost::SchedSetAffinity(
+                ghost::Gtid::Current(), ghost::MachineTopology()->all_cpus());
 
   absl::ParseCommandLine(argc, argv);
 

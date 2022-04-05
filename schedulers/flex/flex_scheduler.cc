@@ -17,10 +17,11 @@
 #include "absl/strings/str_format.h"
 
 // 单位纳秒
-#define VRAN_EMPTY_FLAG 10000
+#define VRAN_EMPTY_FLAG 10000000
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
+#define get_vran_id(task) (task->vran_id)
 
 namespace ghost {
 
@@ -69,9 +70,13 @@ FlexScheduler::FlexScheduler(
     global_cpu_ = c.id();
   }
 
+  cpu_assign_cpu_key_.resize(MachineTopology()->all_cpus().Size());
+  vrans_.resize(MAX_VRAN_NUMBER);
+
   for (const Cpu& cpu : cpus) {
+    // 初始化分给batch
     cpu_assign_cpu_key_[cpu.id()] = 0;
-    cpu_assign_vran_id_key_[0].insert(cpu.id());
+    batch_app_assigned_cpu_.insert(cpu.id());
   }
   // 防止在后续调用cpu_assign_cpu_key_[0]时有误
   cpu_assign_cpu_key_[0] = -1;
@@ -138,8 +143,10 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
     }
   }
   fprintf(stderr, " rq_l(vran_id 0)=%ld", RunqueueSize(0));
-  for(auto& [vran_id, _] : vran_empty_times_from_last_schduler_)
-    fprintf(stderr, " rq_l(vran_id %u)=%ld", vran_id, RunqueueSize(0));
+  for(int i = 0; i < MAX_VRAN_NUMBER; ++i){
+    if (vrans_[i].available)
+      fprintf(stderr, " rq_l(vran_id %u)=%ld", i, RunqueueSize(i << VRAN_INDEX_OFFSET));
+  }
   
   fprintf(stderr, "\n");
 }
@@ -193,7 +200,7 @@ void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_new* payload =
       static_cast<const ghost_msg_payload_task_new*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  DCHECK_LE(payload->runtime, task->status_word.runtime());
 
   UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
                     /* update_elapsed_runtime = */ false);
@@ -246,22 +253,20 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   CHECK_EQ(task->run_state,
            FlexTask::RunState::kBlocked);  // Need to schedule to exit.
 
-  uint32_t vran_id = task->vran_id;
+  uint32_t vran_id = get_vran_id(task);
   // fprintf(stderr, "one vran %d task end\n", vran_id);
   if (vran_id){
-    if(vran_max_cpu_number_[vran_id] == 1){
+    VranInfo& vran = vrans_[vran_id];
+    if(vran.max_cpu_number_ == 1){
       // fprintf(stderr, "no vran %d task left\n", vran_id);
-      vran_max_cpu_number_.erase(vran_id);
-      vran_empty_times_from_last_schduler_.erase(vran_id);
-      vran_last_assign_vran_cpus_.erase(vran_id);
-      for(auto cpu : cpus()){
-        if(cpu_assign_cpu_key_[cpu.id()] == vran_id){
-          cpu_assign_cpu_key_[cpu.id()] = 0;
-          cpu_assign_vran_id_key_[0].insert(cpu.id());
-        }
+      for(auto cpu : vran.cpu_assigns_){
+        cpu_assign_cpu_key_[cpu] = 0;
+        batch_app_assigned_cpu_.insert(cpu);
       }
+      vran.cpu_assigns_.clear();
+      vran.available = false;
     } else {
-      vran_max_cpu_number_[vran_id] -= 1;
+      vran.max_cpu_number_ -= 1;
       // fprintf(stderr, "%d vran %d task left\n", vran_max_cpu_number_[vran_id], vran_id);
     }
   }
@@ -276,13 +281,13 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_blocked* payload =
       reinterpret_cast<const ghost_msg_payload_task_blocked*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  DCHECK_LE(payload->runtime, task->status_word.runtime());
 
-  uint32_t vran_id = task->vran_id;
+  uint32_t vran_id = get_vran_id(task);
   // 两者单位一致，此处不处理
   uint64_t last_ran = payload->runtime - task->last_runtime;
   if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
-    vran_empty_times_from_last_schduler_[vran_id] += 1;
+    vrans_[vran_id].empty_times_from_last_schduler_ += 1;
   }
   task->last_runtime = payload->runtime;
   // printf("vran %d one task time %ld\n", vran_id, last_ran);
@@ -310,7 +315,7 @@ void FlexScheduler::TaskPreempted(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_preempt* payload =
       reinterpret_cast<const ghost_msg_payload_task_preempt*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  DCHECK_LE(payload->runtime, task->status_word.runtime());
 
   task->preempted = true;
   task->prio_boost = true;
@@ -347,13 +352,13 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_yield* payload =
       reinterpret_cast<const ghost_msg_payload_task_yield*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  DCHECK_LE(payload->runtime, task->status_word.runtime());
   
-  uint32_t vran_id = task->vran_id;
+  uint32_t vran_id = get_vran_id(task);
   // 两者单位一致，此处不处理
   uint64_t last_ran = payload->runtime - task->last_runtime;
   if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
-    vran_empty_times_from_last_schduler_[vran_id] += 1;
+    vrans_[vran_id].empty_times_from_last_schduler_ += 1;
   }
   task->last_runtime = payload->runtime;
   // printf("vran %d one task time %ld\n", vran_id, last_ran);
@@ -561,25 +566,27 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
 
   // 为对应的VRAN增加CPU分配上限
   if(unlikely(task->sp == nullptr && (sp->GetQoS() & VRAN_ID_MASK))) {
-    uint32_t vran_id = sp->GetQoS() & VRAN_ID_MASK;
+    uint32_t vran_id = (sp->GetQoS() & VRAN_ID_MASK) >> VRAN_INDEX_OFFSET;
+    VranInfo& vran = vrans_[vran_id];
     // fprintf(stderr, "find new vran %d task\n", vran_id);
-    if(vran_max_cpu_number_.count(vran_id) == 0){
-      vran_max_cpu_number_[vran_id] = 1;
-      vran_empty_times_from_last_schduler_[vran_id] = 0;
-      vran_last_assign_vran_cpus_[vran_id] = 0;
+    if(vran.available == false){
+      vran.available = true;
+      vran.max_cpu_number_ = 1;
+      vran.empty_times_from_last_schduler_ = 0;
+      vran.last_assign_cpus_ = 0;
     } else {
-      vran_max_cpu_number_[vran_id] += 1;
+      vran.max_cpu_number_ += 1;
     }
 
     task->vran_id = vran_id;
     // fprintf(stderr, "have find %d vran %d task\n", vran_max_cpu_number_[vran_id], vran_id);
 
     // 若有，分配一个新的CPU
-    if(cpu_assign_vran_id_key_[0].size() > 1){
-      auto it = cpu_assign_vran_id_key_[0].begin();
-      cpu_assign_vran_id_key_[vran_id].insert(*it);
+    if(batch_app_assigned_cpu_.size() > 1){
+      auto it = batch_app_assigned_cpu_.begin();
+      vran.cpu_assigns_.emplace_back(*it);
       cpu_assign_cpu_key_[*it] = vran_id;
-      cpu_assign_vran_id_key_[0].erase(it);
+      batch_app_assigned_cpu_.erase(it);
     }
   }
   task->sp = sp;
@@ -743,33 +750,37 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   const absl::Time now = absl::Now();
 
   // 重新分配CPU
-  for (auto& [vran_id, empty_time] : vran_empty_times_from_last_schduler_){
-    if(empty_time == 0){
+  for (int i = 1; i < MAX_VRAN_NUMBER; ++i){
+    // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
+    // batch_app不算（所有vrans_[0]没有意义）
+    VranInfo& vran = vrans_[i];
+    if(likely(vran.available == false))
+      continue;
+    if(vran.empty_times_from_last_schduler_ == 0){
       // 若有，分配一个新的CPU
-      if(cpu_assign_vran_id_key_[0].size() > 1
-        && cpu_assign_vran_id_key_[vran_id].size() < vran_max_cpu_number_[vran_id]){
-        cpu_id_t cpu_id = vran_last_assign_vran_cpus_[vran_id];
-        if(cpu_assign_cpu_key_[cpu_id] == 0){
-          cpu_assign_vran_id_key_[vran_id].insert(cpu_id);
-          cpu_assign_cpu_key_[cpu_id] = vran_id;
-          cpu_assign_vran_id_key_[0].erase(cpu_id);
+      if(batch_app_assigned_cpu_.size() > 1
+        && vran.cpu_assigns_.size() < vran.max_cpu_number_){
+        if(cpu_assign_cpu_key_[vran.last_assign_cpus_] == 0){
+          vran.cpu_assigns_.emplace_back(vran.last_assign_cpus_);
+          cpu_assign_cpu_key_[vran.last_assign_cpus_] = i;
+          batch_app_assigned_cpu_.erase(vran.last_assign_cpus_);
         } else {
-          auto it = cpu_assign_vran_id_key_[0].begin();
-          cpu_assign_vran_id_key_[vran_id].insert(*it);
-          cpu_assign_cpu_key_[*it] = vran_id;
-          cpu_assign_vran_id_key_[0].erase(it);
+          auto it = batch_app_assigned_cpu_.begin();
+          vran.cpu_assigns_.emplace_back(*it);
+          cpu_assign_cpu_key_[*it] = i;
+          batch_app_assigned_cpu_.erase(it);
         }
       }
     // 隐含已分配CPU > 1
-    } else if (empty_time > 1){
+    } else if (vran.empty_times_from_last_schduler_  > 1){
       // fprintf(stderr, "remove cpu %d\n", empty_time);
-      auto it = cpu_assign_vran_id_key_[vran_id].begin();
-      cpu_assign_vran_id_key_[0].insert(*it);
-      cpu_assign_cpu_key_[*it] = 0;
-      vran_last_assign_vran_cpus_[vran_id] = *it;
-      cpu_assign_vran_id_key_[vran_id].erase(it);
+      cpu_id_t cpu = vran.cpu_assigns_.back();
+      batch_app_assigned_cpu_.insert(cpu);
+      cpu_assign_cpu_key_[cpu] = 0;
+      vran.last_assign_cpus_ = cpu;
+      vran.cpu_assigns_.pop_back();
     }
-    empty_time = 0;
+    vran.empty_times_from_last_schduler_ = 0;
   }
 
   // vran的task在yield后直接进入就绪状态，因为此处的yield实际为劫持函数
@@ -789,7 +800,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       if (SkipForSchedule(i, cpu)) {
         continue;
       }
-      vRAN_id_t vran_id = cpu_assign_cpu_key_[cpu.id()];
+      vRAN_id_t vran_id = cpu_assign_cpu_key_[cpu.id()] << VRAN_INDEX_OFFSET;
 
     again:
       if (cs->current) {

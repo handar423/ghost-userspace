@@ -68,7 +68,7 @@ def RunGhost():
   e.throughputs.extend(list(i for i in range(390000, 451000, 1000)))
   e.rocksdb = GetRocksDBOptions(Scheduler.GHOST, _NUM_CPUS, _NUM_GHOST_WORKERS)
   e.rocksdb.get_exponential_mean = '1us'
-  e.rocksdb.ghost_qos = 2
+  e.rocksdb.ghost_qos = 16
   e.antagonist = GetAntagonistOptions(Scheduler.GHOST, _NUM_ANTAGONIST_CPUS)
   e.antagonist.ghost_qos = 1
   e.ghost = GetGhostOptions(_NUM_CPUS)

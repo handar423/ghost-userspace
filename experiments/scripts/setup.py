@@ -139,9 +139,9 @@ def CopyBinaries(paths: Paths):
   # CopyBinary(tmp.name + "/com_google_ghost/antagonist", paths.antagonist)
   # CopyBinary(tmp.name + "/com_google_ghost/agent_shinjuku", paths.ghost)
   # tmp.cleanup()
-  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku.runfiles/com_google_ghost/rocksdb_single", paths.rocksdb)
-  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku.runfiles/com_google_ghost/antagonist", paths.antagonist)
-  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku.runfiles/com_google_ghost/agent_shinjuku", paths.ghost)
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/rocksdb_single", paths.rocksdb)
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/antagonist", paths.antagonist)
+  CopyBinary("/home/Flexran_all/.cache/bazel/_bazel_root/b83a37ee6450ef31be6fec94a12fed66/execroot/com_google_ghost/bazel-out/k8-fastbuild/bin/experiments/scripts/shinjuku_shenango.runfiles/com_google_ghost/agent_flex", paths.ghost)
 
 
 
