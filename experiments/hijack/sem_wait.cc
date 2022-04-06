@@ -14,7 +14,7 @@ using ghost_test::Ghost_Status;
 
 // TODO 加一个线程名
 int sem_wait(sem_t *sem) {
-    if (Ghost_Status::thread_num == WORKER_NUM) {
+    if (Ghost_Status::thread_num == Ghost_Status::worker_num) {
         // Yield to scheduler
         sched_yield();
     } else {
@@ -29,7 +29,7 @@ int sem_wait(sem_t *sem) {
         Ghost_Status::thread_init(sid);
         printf("Ghost Thread %d initialization finished\n", sid);
         // spin until all the threads have initialized
-        while(Ghost_Status::thread_num != WORKER_NUM);
+        while(Ghost_Status::thread_num != Ghost_Status::worker_num);
         // Yield to scheduler
         sched_yield();
     }

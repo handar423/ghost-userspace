@@ -1,5 +1,6 @@
 #include "ghost_status.h"
 #include <stdio.h>
+using std::getenv;
 
 namespace ghost_test {
 
@@ -11,20 +12,30 @@ namespace {
 static constexpr uint32_t kWorkClassIdentifier = 0;
 }  // namespace
 
-Ghost Ghost_Status::ghost_(WORKER_NUM, 1);
 
 atomic_int Ghost_Status::have_global_init(0);
 atomic_int Ghost_Status::thread_num(0);
+int Ghost_Status::worker_num(DEFAULT_WORKER_NUM);
+int Ghost_Status::qos(DEFAULT_QOS);
+Ghost Ghost_Status::ghost_(DEFAULT_WORKER_NUM, 1);
 
 const absl::Duration Ghost_Status::deadline = absl::Microseconds(100);
 
 void Ghost_Status::global_init(){
     fprintf(stderr, "global_init\n");
+    // read in environment variables 
+    char* worker_num_ptr = getenv("GHOST_WORKER_NUM");
+    char* qos_ptr = getenv("GHOST_QOS");
+    worker_num = worker_num_ptr == NULL ? DEFAULT_WORKER_NUM : atoi(worker_num_ptr);
+    qos = qos_ptr == NULL ? DEFAULT_QOS : atoi(qos_ptr);
+    fprintf(stderr, "worker_num: %d\n", worker_num);
+    fprintf(stderr, "qos: %d\n", qos);
+    // initialize ghost 
     ghost::work_class wc;
     ghost_.GetWorkClass(kWorkClassIdentifier, wc);
     wc.id = kWorkClassIdentifier;
     wc.flags = WORK_CLASS_ONESHOT;
-    wc.qos = 16;
+    wc.qos = qos;
     // Write the max unsigned 64-bit integer as the deadline just in case we want
     // to run the experiment with the ghOSt EDF (Earliest-Deadline-First)
     // scheduler.

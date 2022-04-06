@@ -8,7 +8,8 @@
 #include "absl/time/time.h"
 
 // the number is set according to the hijacked application 
-#define WORKER_NUM 5
+#define DEFAULT_WORKER_NUM 5
+#define DEFAULT_QOS 16
 using std::atomic_int;
 
 typedef int (*usleep_op_type)(useconds_t __useconds);
@@ -22,6 +23,10 @@ class Ghost_Status
 public:
     // Ghost对象
     static Ghost ghost_;
+
+    static int worker_num;
+
+    static int qos;
 
     static atomic_int thread_num;
 
