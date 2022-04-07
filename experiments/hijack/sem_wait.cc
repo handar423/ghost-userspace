@@ -12,24 +12,13 @@
 
 using ghost_test::Ghost_Status;
 
-// TODO 加一个线程名
+static sem_op_type old_sem_wait = (sem_op_type)(dlsym(RTLD_NEXT, "sem_wait"));
 int sem_wait(sem_t *sem) {
-    if (Ghost_Status::thread_num == Ghost_Status::worker_num) {
-        // Yield to scheduler
-        sched_yield();
-    } else {
-        // Ghost initialization
-        int sid = Ghost_Status::thread_num.fetch_add(1);
-        if(sid == 0){
-            Ghost_Status::global_init();
-        }
-        // spin until global inistalization is finished
-        while(Ghost_Status::have_global_init == 0);
-        // Ghost Thread initialization
-        Ghost_Status::thread_init(sid);
-        printf("Ghost Thread %d initialization finished\n", sid);
-        // spin until all the threads have initialized
-        while(Ghost_Status::thread_num != Ghost_Status::worker_num);
+    char tname[80];
+    prctl(PR_GET_NAME, tname);
+    //printf("!!!!!!!!!!==== %s enter sem_wait ====!!!!!!!!!!!!\n", tname);
+    if (std::strncmp("bbupool_rt_", tname, 11) != 0) return old_sem_wait(sem);
+    else {
         // Yield to scheduler
         sched_yield();
     }
