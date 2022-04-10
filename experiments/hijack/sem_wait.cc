@@ -17,6 +17,10 @@ int sem_wait(sem_t *sem) {
     char tname[80];
     prctl(PR_GET_NAME, tname);
     //printf("!!!!!!!!!!==== %s enter sem_wait ====!!!!!!!!!!!!\n", tname);
+
+    // DEBUG only
+    return old_sem_wait(sem);
+
     if (std::strncmp("bbupool_rt_", tname, 11) != 0) return old_sem_wait(sem);
     else {
         // Yield to scheduler

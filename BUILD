@@ -966,6 +966,8 @@ cc_binary(
         "experiments/hijack/ghost_status.cc",
         "experiments/hijack/sem_wait.cc",
         "experiments/hijack/sem_wait.h",
+        "experiments/hijack/pthread_setaffinity_np.cc",
+        "experiments/hijack/pthread_setaffinity_np.h",
     ],
     deps = [
         ":base",

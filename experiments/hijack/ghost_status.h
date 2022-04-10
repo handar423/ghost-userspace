@@ -3,14 +3,16 @@
 #include <cstdlib>
 #include <ctime>
 #include <atomic>
+#include <mutex>
 #include "experiments/shared/ghost.h"
 #include "lib/ghost.h"
 #include "absl/time/time.h"
 
 // the number is set according to the hijacked application 
-#define DEFAULT_WORKER_NUM 5
+#define DEFAULT_WORKER_NUM 20
 #define DEFAULT_QOS 16
 using std::atomic_int;
+using std::mutex;
 
 typedef int (*usleep_op_type)(useconds_t __useconds);
 typedef int (*nanosleep_op_type)(const struct timespec *__requested_time,
@@ -30,19 +32,17 @@ public:
 
     static atomic_int thread_num;
 
+    static mutex thread_init_mutex;
+
     static atomic_int have_global_init;
 
     static const absl::Duration deadline;
 
+    static constexpr uint32_t kWorkClassIdentifier = 0;
+
     static void global_init();
 
     static void thread_init(int sid);
-
-    static void thread_set_runnable(int sid);
-
-    static void thread_wait_runnable(int sid);
-
-    static constexpr uint32_t kWorkClassIdentifier = 0;
 
 };
 

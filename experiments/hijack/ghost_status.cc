@@ -15,6 +15,7 @@ static constexpr uint32_t kWorkClassIdentifier = 0;
 
 atomic_int Ghost_Status::have_global_init(0);
 atomic_int Ghost_Status::thread_num(0);
+mutex Ghost_Status::thread_init_mutex;
 int Ghost_Status::worker_num(DEFAULT_WORKER_NUM);
 int Ghost_Status::qos(DEFAULT_QOS);
 Ghost Ghost_Status::ghost_(DEFAULT_WORKER_NUM, 1);
@@ -22,7 +23,7 @@ Ghost Ghost_Status::ghost_(DEFAULT_WORKER_NUM, 1);
 const absl::Duration Ghost_Status::deadline = absl::Microseconds(100);
 
 void Ghost_Status::global_init(){
-    fprintf(stderr, "global_init\n");
+    printf("global_init started\n");
     // read in environment variables 
     char* worker_num_ptr = getenv("GHOST_WORKER_NUM");
     char* qos_ptr = getenv("GHOST_QOS");
@@ -45,7 +46,7 @@ void Ghost_Status::global_init(){
     wc.period = 0;
     ghost_.SetWorkClass(kWorkClassIdentifier, wc);
     have_global_init = 1;
-    fprintf(stderr, "global_init finished\n");
+    printf("global_init finished\n");
 }
 
 void Ghost_Status::thread_init(int sid){
@@ -62,7 +63,7 @@ void Ghost_Status::thread_init(int sid){
     ghost_.SetSchedItem(sid, si);
     //printf("thread sid %d set scheditem\n", sid);
     const int ret = ghost::SchedTaskEnterGhost(/*pid=*/0);
-    //printf("thread sid %d schedTaskEnterGhost\n", sid);
+    printf("thread sid %d schedTaskEnterGhost\n", sid);
     CHECK_EQ(ret, 0);
 }
 }
