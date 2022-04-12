@@ -51,5 +51,6 @@ dequeue的时候再task queue间轮训
 
 现在需要加上：
     多task queue问题
-    单独loop overhead太大：没试过
-    两个vran一起跑现在是debug
+    优化
+        重构一遍，都放进VRANINFO里
+        加上task queue的事儿（逻辑是不区分多核

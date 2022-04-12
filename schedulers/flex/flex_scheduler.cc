@@ -17,7 +17,7 @@
 #include "absl/strings/str_format.h"
 
 // 单位纳秒
-#define VRAN_EMPTY_FLAG 10000000
+// #define VRAN_EMPTY_FLAG 10000000
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
@@ -63,23 +63,18 @@ FlexScheduler::FlexScheduler(
       global_cpu_(global_cpu),
       global_channel_(GHOST_MAX_QUEUE_ELEMS, /*node=*/0),
       loop_empty_time_slice_(loop_empty_time_slice),
-      preemption_time_slice_(preemption_time_slice) {
+      preemption_time_slice_(preemption_time_slice),
+      batch_app_assigned_cpu_(MachineTopology()->EmptyCpuList()) {
   if (!cpus.IsSet(global_cpu_)) {
     Cpu c = cpus.Front();
     CHECK(c.valid());
     global_cpu_ = c.id();
   }
 
-  cpu_assign_cpu_key_.resize(MachineTopology()->all_cpus().Size());
   vrans_.resize(MAX_VRAN_NUMBER);
 
-  for (const Cpu& cpu : cpus) {
-    // 初始化分给batch
-    cpu_assign_cpu_key_[cpu.id()] = 0;
-    batch_app_assigned_cpu_.insert(cpu.id());
-  }
-  // 防止在后续调用cpu_assign_cpu_key_[0]时有误
-  cpu_assign_cpu_key_[0] = -1;
+  // 初始化分给batch
+  batch_app_assigned_cpu_ += cpus;
 }
 
 FlexScheduler::~FlexScheduler() {}
@@ -88,6 +83,7 @@ size_t FlexScheduler::RunqueueSize(vRAN_id_t vran_id) {
   if (vran_id) return run_queue_[vran_id].size();
   size_t size = 0;
   for (const auto& [qos, rq] : run_queue_) {
+    // size += rq.size();
     size += ((qos & VRAN_ID_MASK) == 0) ? rq.size() : 0;
   }
   return size;
@@ -132,9 +128,9 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   }
 
   fprintf(stderr, "SchedState: ");
-  for (const Cpu& cpu : cpus()) {
+  for (const Cpu& cpu : batch_app_assigned_cpu_) {
     CpuState* cs = cpu_state(cpu);
-    fprintf(stderr, "%d(vran_id %u):", cpu.id(), cpu_assign_cpu_key_[cpu.id()]);
+    fprintf(stderr, "%d_0:", cpu.id());
     if (!cs->current) {
       fprintf(stderr, "none ");
     } else {
@@ -142,10 +138,25 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
       absl::FPrintF(stderr, "%s ", gtid.describe());
     }
   }
-  fprintf(stderr, " rq_l(vran_id 0)=%ld", RunqueueSize(0));
+  for(int i = 1; i < MAX_VRAN_NUMBER; ++i){
+    VranInfo& vran = vrans_[i];
+    if(vran.available == false) continue;
+    for (const Cpu& cpu : vran.cpu_assigns_) {
+      CpuState* cs = cpu_state(cpu);
+      fprintf(stderr, "%d_%u:", cpu.id(), i);
+      if (!cs->current) {
+        fprintf(stderr, "none ");
+      } else {
+        Gtid gtid = cs->current->gtid;
+        absl::FPrintF(stderr, "%s ", gtid.describe());
+      }
+    }
+  }
+  fprintf(stderr, " rq_l_0=%ld", RunqueueSize(0));
   for(int i = 0; i < MAX_VRAN_NUMBER; ++i){
     if (vrans_[i].available)
-      fprintf(stderr, " rq_l(vran_id %u)=%ld", i, RunqueueSize(i << VRAN_INDEX_OFFSET));
+      fprintf(stderr, " rq_l_%u(empty %d)=%ld", i, 
+        vrans_[i].empty_times_from_last_schduler_, RunqueueSize(i << VRAN_INDEX_OFFSET));
   }
   
   fprintf(stderr, "\n");
@@ -257,13 +268,10 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   // fprintf(stderr, "one vran %d task end\n", vran_id);
   if (vran_id){
     VranInfo& vran = vrans_[vran_id];
-    if(vran.max_cpu_number_ == 1){
+    if(vran.max_cpu_number_ == 2){
       // fprintf(stderr, "no vran %d task left\n", vran_id);
-      for(auto cpu : vran.cpu_assigns_){
-        cpu_assign_cpu_key_[cpu] = 0;
-        batch_app_assigned_cpu_.insert(cpu);
-      }
-      vran.cpu_assigns_.clear();
+      batch_app_assigned_cpu_ += vran.cpu_assigns_;
+      vran.cpu_assigns_ = MachineTopology()->EmptyCpuList();
       vran.available = false;
     } else {
       vran.max_cpu_number_ -= 1;
@@ -283,15 +291,11 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
 
   DCHECK_LE(payload->runtime, task->status_word.runtime());
 
-  uint32_t vran_id = get_vran_id(task);
   // 两者单位一致，此处不处理
-  uint64_t last_ran = payload->runtime - task->last_runtime;
-  if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
-    vrans_[vran_id].empty_times_from_last_schduler_ += 1;
-  }
-  task->last_runtime = payload->runtime;
-  // printf("vran %d one task time %ld\n", vran_id, last_ran);
-
+  // uint64_t last_ran = payload->runtime - task->last_runtime;
+  vrans_[get_vran_id(task)].empty_times_from_last_schduler_ += 1;
+  // task->last_runtime = payload->runtime;
+  // printf("vran block one task time\n");
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -356,11 +360,11 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   
   uint32_t vran_id = get_vran_id(task);
   // 两者单位一致，此处不处理
-  uint64_t last_ran = payload->runtime - task->last_runtime;
-  if(vran_id != 0 && last_ran < VRAN_EMPTY_FLAG){
-    vrans_[vran_id].empty_times_from_last_schduler_ += 1;
-  }
-  task->last_runtime = payload->runtime;
+  // uint64_t last_ran = payload->runtime - task->last_runtime;
+  // if(vran_id != 0){
+  vrans_[vran_id].empty_times_from_last_schduler_ += 1;
+  // }
+  // task->last_runtime = payload->runtime;
   // printf("vran %d one task time %ld\n", vran_id, last_ran);
 
   // States other than the typical kOnCpu are possible here:
@@ -395,25 +399,15 @@ void FlexScheduler::Yield(FlexTask* task, vRAN_id_t vran_id) {
   // GlobalSchedule()).
   CHECK(task->oncpu() || task->queued());
   task->run_state = FlexTask::RunState::kYielding;
-  if(vran_id)
-    vran_yielding_tasks_.emplace_back(task);
-  else
-    yielding_tasks_.emplace_back(task);
+  yielding_tasks_.emplace_back(task);
 }
 
 void FlexScheduler::Unyield(FlexTask* task) {
   CHECK(task->yielding());
 
   auto it = std::find(yielding_tasks_.begin(), yielding_tasks_.end(), task);
-  if(it != yielding_tasks_.end()){
-    yielding_tasks_.erase(it);
-  } else {
-    auto it = std::find(vran_yielding_tasks_.begin(), vran_yielding_tasks_.end(), task);
-    // 应恒为真
-    CHECK(it != vran_yielding_tasks_.end());
-    vran_yielding_tasks_.erase(it);
-  }
-
+  CHECK(it != yielding_tasks_.end());
+  yielding_tasks_.erase(it);
   Enqueue(task);
 }
 
@@ -568,10 +562,10 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
   if(unlikely(task->sp == nullptr && (sp->GetQoS() & VRAN_ID_MASK))) {
     uint32_t vran_id = (sp->GetQoS() & VRAN_ID_MASK) >> VRAN_INDEX_OFFSET;
     VranInfo& vran = vrans_[vran_id];
-    // fprintf(stderr, "find new vran %d task\n", vran_id);
+    fprintf(stderr, "find new vran %d task\n", vran_id);
     if(vran.available == false){
       vran.available = true;
-      vran.max_cpu_number_ = 1;
+      vran.max_cpu_number_ = 2;
       vran.empty_times_from_last_schduler_ = 0;
       vran.last_assign_cpus_ = 0;
     } else {
@@ -579,15 +573,15 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     }
 
     task->vran_id = vran_id;
-    // fprintf(stderr, "have find %d vran %d task\n", vran_max_cpu_number_[vran_id], vran_id);
+    fprintf(stderr, "have find %d vran %d task\n", vran.max_cpu_number_, vran_id);
 
     // 若有，分配一个新的CPU
-    if(batch_app_assigned_cpu_.size() > 1){
-      auto it = batch_app_assigned_cpu_.begin();
-      vran.cpu_assigns_.emplace_back(*it);
-      cpu_assign_cpu_key_[*it] = vran_id;
-      batch_app_assigned_cpu_.erase(it);
-    }
+    while(vran.cpu_assigns_.Size() < vran.max_cpu_number_)
+      if(batch_app_assigned_cpu_.Size() > 1){
+        Cpu front = batch_app_assigned_cpu_.Front();
+        vran.cpu_assigns_.Set(front);
+        batch_app_assigned_cpu_.Clear(front);
+      } else break;
   }
   task->sp = sp;
   task->has_work = sp->HasWork();
@@ -750,59 +744,187 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   const absl::Time now = absl::Now();
 
   // 重新分配CPU
-  for (int i = 1; i < MAX_VRAN_NUMBER; ++i){
-    // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
-    // batch_app不算（所有vrans_[0]没有意义）
+  // for (int i = 1; i < MAX_VRAN_NUMBER; ++i){
+  //   // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
+  //   // batch_app不算（所有vrans_[0]没有意义）
+    // VranInfo& vran = vrans_[i];
+    // if(likely(vran.available == false))
+      // continue;
+    // printf("queue size %d\n", RunqueueSize(i<<VRAN_ID_MASK));
+  //   if(vran.empty_times_from_last_schduler_ == 0){
+  //     // 若有，分配一个新的CPU
+  //     if(batch_app_assigned_cpu_.size() > 1
+  //       && vran.cpu_assigns_.size() < vran.max_cpu_number_){
+  //       if(cpu_assign_cpu_key_[vran.last_assign_cpus_] == 0){
+  //         vran.cpu_assigns_.emplace_back(vran.last_assign_cpus_);
+  //         cpu_assign_cpu_key_[vran.last_assign_cpus_] = i;
+  //         batch_app_assigned_cpu_.erase(vran.last_assign_cpus_);
+  //       } else {
+  //         auto it = batch_app_assigned_cpu_.begin();
+  //         vran.cpu_assigns_.emplace_back(*it);
+  //         cpu_assign_cpu_key_[*it] = i;
+  //         batch_app_assigned_cpu_.erase(it);
+  //       }
+  //     }
+  //   // 隐含已分配CPU > 1
+  //   } else if (vran.empty_times_from_last_schduler_  > 1){
+  //     // fprintf(stderr, "remove cpu %d\n", empty_time);
+  //     cpu_id_t cpu = vran.cpu_assigns_.back();
+  //     batch_app_assigned_cpu_.insert(cpu);
+  //     cpu_assign_cpu_key_[cpu] = 0;
+  //     vran.last_assign_cpus_ = cpu;
+  //     vran.cpu_assigns_.pop_back();
+  //   }
+  //   vran.empty_times_from_last_schduler_ = 0;
+  // }
+
+  for (int i = 1; i < MAX_VRAN_NUMBER; ++i) {
+  // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
+  // batch_app不算（所有vrans_[0]没有意义）
     VranInfo& vran = vrans_[i];
     if(likely(vran.available == false))
       continue;
-    if(vran.empty_times_from_last_schduler_ == 0){
-      // 若有，分配一个新的CPU
-      if(batch_app_assigned_cpu_.size() > 1
-        && vran.cpu_assigns_.size() < vran.max_cpu_number_){
-        if(cpu_assign_cpu_key_[vran.last_assign_cpus_] == 0){
-          vran.cpu_assigns_.emplace_back(vran.last_assign_cpus_);
-          cpu_assign_cpu_key_[vran.last_assign_cpus_] = i;
-          batch_app_assigned_cpu_.erase(vran.last_assign_cpus_);
-        } else {
-          auto it = batch_app_assigned_cpu_.begin();
-          vran.cpu_assigns_.emplace_back(*it);
-          cpu_assign_cpu_key_[*it] = i;
-          batch_app_assigned_cpu_.erase(it);
+    vran.empty_times_from_last_schduler_ = 0;
+    // TODO: Refactor this loop
+    for (int i = 0; i < 2; i++) {
+      CpuList updated_cpus = MachineTopology()->EmptyCpuList();
+      for (const Cpu& cpu : vran.cpu_assigns_) {
+        CpuState* cs = cpu_state(cpu);
+        if (SkipForSchedule(i, cpu)) {
+          continue;
+        }
+        vRAN_id_t vran_id = i << VRAN_INDEX_OFFSET;
+
+      again:
+        if (cs->current) {
+          // Preempt the current task if either:
+          // 1. A higher-priority task wants to run.
+          // 2. The task's unschedule level is at least `kCouldUnschedule`, making
+          // the task eligible for preemption.
+          FlexTask* peek = Peek(vran_id);
+          bool should_preempt = false;
+          if (peek) {
+            uint32_t current_qos = cs->current->sp->GetQoS();
+            uint32_t peek_qos = peek->sp->GetQoS();
+
+            // 当且仅当batch被vran抢占
+            if (current_qos < peek_qos) {
+              should_preempt = true;
+            } else if (current_qos == peek_qos && cs->current->unschedule_level >=
+                      FlexTask::UnscheduleLevel::kCouldUnschedule) {
+              should_preempt = true;
+            }
+          }
+          if (!should_preempt) {
+            continue;
+          }
+        }
+        FlexTask* to_run = Dequeue(vran_id);
+        if (!to_run) {
+          // No tasks left to schedule.
+          break;
+        }
+
+        // The chosen task was preempted earlier but hasn't gotten off the
+        // CPU. Make it ineligible for selection in this scheduling round.
+        // 不应该出现于vran
+        if (to_run->status_word.on_cpu()) {
+          // CHECK(vran_id == 0);
+          Yield(to_run, vran_id);
+          goto again;
+        }
+
+        cs->next = to_run;
+
+        updated_cpus.Set(cpu.id());
+      }
+
+      for (const Cpu& cpu : vran.cpu_assigns_) {
+        CpuState* cs = cpu_state(cpu);
+        // Make a copy of the `cs->current` pointer since we need to access the
+        // task after it is unscheduled. `UnscheduleTask` sets `cs->current` to
+        // `nullptr`.
+        FlexTask* task = cs->current;
+        if (task) {
+          if (!cs->next) {
+            if (task->unschedule_level ==
+                FlexTask::UnscheduleLevel::kCouldUnschedule) {
+              // We set the level to `kNoUnschedule` since no task is being
+              // scheduled in place of `task` on `cpu`. We cannot set the level to
+              // `kNoUnschedule` when trying to schedule another task on this
+              // `cpu` because that schedule may fail, so `task` needs to be
+              // directly unscheduled in that case so that `task` does not get
+              // preference over tasks waiting in the runqueue.
+              //
+              // Note that an unschedule is optional for a level of
+              // `kCouldUnschedule`, so we do not initiate an unschedule unlike
+              // below for `kMustUnschedule`.
+              task->unschedule_level =
+                  FlexTask::UnscheduleLevel::kNoUnschedule;
+            } else if (task->unschedule_level ==
+                      FlexTask::UnscheduleLevel::kMustUnschedule) {
+              // `task` must be unscheduled and we have no new task schedule to
+              // pair the unschedule with, so initiate the unschedule directly.
+              UnscheduleTask(task);
+            }
+          }
+
+          // Four cases:
+          //
+          // If there is a new task `cs->next` to run next (i.e., `cs->next` !=
+          // `nullptr`):
+          //   Case 1: If the level is `kCouldUnschedule`, we will attempt the
+          //   schedule below and directly initiate an unschedule of `task` if
+          //   that schedule fails.
+          //
+          //   Case 2: If the level is `kMustUnschedule`, we will attempt the
+          //   schedule below and directly initiate an unschedule of `task` if
+          //   that schedule fails.
+          //
+          // If there is no new task `cs->current` to run next (i.e., `cs->next`
+          // == `nullptr`):
+          //   Case 3: If the level of `task` was `kCouldUnschedule`, we set it to
+          //   `kNoUnschedule` above.
+          //
+          //   Case 4: If the level of `task` was `kMustUnschedule`, we directly
+          //   initiated an unschedule of `task` above. `UnscheduleTask(task)`
+          //   sets the level of `task` to `kNoUnschedule`.
+          CHECK(cs->next || task->unschedule_level ==
+                                FlexTask::UnscheduleLevel::kNoUnschedule);
         }
       }
-    // 隐含已分配CPU > 1
-    } else if (vran.empty_times_from_last_schduler_  > 1){
-      // fprintf(stderr, "remove cpu %d\n", empty_time);
-      cpu_id_t cpu = vran.cpu_assigns_.back();
-      batch_app_assigned_cpu_.insert(cpu);
-      cpu_assign_cpu_key_[cpu] = 0;
-      vran.last_assign_cpus_ = cpu;
-      vran.cpu_assigns_.pop_back();
-    }
-    vran.empty_times_from_last_schduler_ = 0;
-  }
 
-  // vran的task在yield后直接进入就绪状态，因为此处的yield实际为劫持函数
-  if (!vran_yielding_tasks_.empty()) {
-    for (FlexTask* t : vran_yielding_tasks_) {
-      CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);
-      Enqueue(t);
+      for (const Cpu& cpu : updated_cpus) {
+        CpuState* cs = cpu_state(cpu);
+
+        FlexTask* next = cs->next;
+        CHECK_NE(next, nullptr);
+
+        if (cs->current == next) continue;
+
+        RunRequest* req = enclave()->GetRunRequest(cpu);
+        req->Open({
+            .target = next->gtid,
+            .target_barrier = next->seqnum,
+            .commit_flags = COMMIT_AT_TXN_COMMIT,
+        });
+
+        open_cpus.Set(cpu.id());
+      }
     }
-    vran_yielding_tasks_.clear();
   }
 
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
     CpuList updated_cpus = MachineTopology()->EmptyCpuList();
-    for (const Cpu& cpu : cpus()) {
+    for (const Cpu& cpu : batch_app_assigned_cpu_) {
       CpuState* cs = cpu_state(cpu);
       if (SkipForSchedule(i, cpu)) {
         continue;
       }
-      vRAN_id_t vran_id = cpu_assign_cpu_key_[cpu.id()] << VRAN_INDEX_OFFSET;
+      vRAN_id_t vran_id = 0;
 
-    again:
+    again1:
       if (cs->current) {
         // Approximate the elapsed runtime rather than update the runtime with
         // 'cs->current->UpdateRuntime()' to get the true elapsed runtime from
@@ -827,7 +949,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
           // 当且仅当batch被vran抢占
           if (current_qos < peek_qos) {
             should_preempt = true;
-          } else if (current_qos == peek_qos && vran_id == 0) {
+          } else if (current_qos == peek_qos) {
             if (elapsed_runtime >= preemption_time_slice_ &&
                 cs->current->orch &&
                 !cs->current->orch->Repeating(cs->current->sp)) {
@@ -852,9 +974,8 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       // CPU. Make it ineligible for selection in this scheduling round.
       // 不应该出现于vran
       if (to_run->status_word.on_cpu()) {
-        CHECK(vran_id == 0);
         Yield(to_run, vran_id);
-        goto again;
+        goto again1;
       }
 
       cs->next = to_run;
@@ -862,7 +983,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       updated_cpus.Set(cpu.id());
     }
 
-    for (const Cpu& cpu : cpus()) {
+    for (const Cpu& cpu : batch_app_assigned_cpu_) {
       CpuState* cs = cpu_state(cpu);
       // Make a copy of the `cs->current` pointer since we need to access the
       // task after it is unscheduled. `UnscheduleTask` sets `cs->current` to

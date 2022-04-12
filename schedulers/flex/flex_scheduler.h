@@ -241,7 +241,9 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     const Agent* agent = nullptr;
   } ABSL_CACHELINE_ALIGNED;
 
-  struct VranInfo {
+  class VranInfo {
+  public:
+    VranInfo():cpu_assigns_(MachineTopology()->EmptyCpuList()){}
     bool available = false;
 
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
@@ -253,7 +255,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     // 每一类vRAN分配CPU上限
     uint32_t max_cpu_number_;
 
-    std::vector<cpu_id_t> cpu_assigns_;
+    CpuList cpu_assigns_;
   };
 
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
@@ -339,8 +341,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   std::map<uint32_t, std::deque<FlexTask*>> run_queue_;
   // 这里应该只有batch的
   std::vector<FlexTask*> paused_repeatables_;
-  // 任何来源于FlexRAN的任务应该马上进入run_queue
-  std::vector<FlexTask*> vran_yielding_tasks_;
+
   std::vector<FlexTask*> yielding_tasks_;
   // 如果是pid作为key,for ali，可以出现多个pid
   // 现在先按支持算
@@ -350,13 +351,11 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   const absl::Duration loop_empty_time_slice_;
   const absl::Duration preemption_time_slice_;
 
-  // CPU和FlexRAN/Batch的对应关系
-  // 这里是按数位计的，存在4个空bit，用的时候把空位去除
-  std::vector<vRAN_id_t> cpu_assign_cpu_key_;
+  //CPU和FlexRAN/Batch的对应关系是按数位计的，存在4个空bit，用的时候把空位去除
   
   std::vector<VranInfo> vrans_;
 
-  absl::flat_hash_set<cpu_id_t> batch_app_assigned_cpu_;
+  CpuList batch_app_assigned_cpu_;
 };
 
 // Initializes the task allocator and the Flex scheduler.
