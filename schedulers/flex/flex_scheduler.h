@@ -243,11 +243,12 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
   class VranInfo {
   public:
-    VranInfo():cpu_assigns_(MachineTopology()->EmptyCpuList()){}
+    VranInfo():
+      cpu_assigns_(MachineTopology()->EmptyCpuList()){}
     bool available = false;
 
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
-    cpu_id_t last_assign_cpus_;
+    uint32_t last_assign_cpus_;
 
     // 每一类vRAN上一轮为空次数
     uint32_t empty_times_from_last_schduler_;
@@ -263,7 +264,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   void UnscheduleTask(FlexTask* task);
 
   // Marks a task as yielded.
-  void Yield(FlexTask* task, vRAN_id_t vran_id);
+  void Yield(FlexTask* task);
 
   // Unmarks a task as yielded.
   void Unyield(FlexTask* task);

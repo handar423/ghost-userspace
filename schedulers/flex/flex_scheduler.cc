@@ -155,8 +155,7 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   fprintf(stderr, " rq_l_0=%ld", RunqueueSize(0));
   for(int i = 0; i < MAX_VRAN_NUMBER; ++i){
     if (vrans_[i].available)
-      fprintf(stderr, " rq_l_%u(empty %d)=%ld", i, 
-        vrans_[i].empty_times_from_last_schduler_, RunqueueSize(i << VRAN_INDEX_OFFSET));
+      fprintf(stderr, " rq_l_%u(empty %d)=%ld", i, vrans_[i].empty_times_from_last_schduler_, RunqueueSize(i << VRAN_INDEX_OFFSET));
   }
   
   fprintf(stderr, "\n");
@@ -358,11 +357,10 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
 
   DCHECK_LE(payload->runtime, task->status_word.runtime());
   
-  uint32_t vran_id = get_vran_id(task);
   // 两者单位一致，此处不处理
   // uint64_t last_ran = payload->runtime - task->last_runtime;
   // if(vran_id != 0){
-  vrans_[vran_id].empty_times_from_last_schduler_ += 1;
+  vrans_[get_vran_id(task)].empty_times_from_last_schduler_ += 1;
   // }
   // task->last_runtime = payload->runtime;
   // printf("vran %d one task time %ld\n", vran_id, last_ran);
@@ -377,7 +375,7 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
     CpuState* cs = cpu_state_of(task);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
-    Yield(task, vran_id);
+    Yield(task);
   } else {
     CHECK(task->queued() || task->paused());
   }
@@ -392,7 +390,7 @@ void FlexScheduler::DiscoveryComplete() {
   in_discovery_ = false;
 }
 
-void FlexScheduler::Yield(FlexTask* task, vRAN_id_t vran_id) {
+void FlexScheduler::Yield(FlexTask* task) {
   // An oncpu() task can do a sched_yield() and get here via
   // FlexTaskYield(). We may also get here if the scheduler wants to inhibit
   // a task from being picked in the current scheduling round (see
@@ -567,7 +565,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
       vran.available = true;
       vran.max_cpu_number_ = 2;
       vran.empty_times_from_last_schduler_ = 0;
-      vran.last_assign_cpus_ = 0;
     } else {
       vran.max_cpu_number_ += 1;
     }
@@ -576,12 +573,12 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     fprintf(stderr, "have find %d vran %d task\n", vran.max_cpu_number_, vran_id);
 
     // 若有，分配一个新的CPU
-    while(vran.cpu_assigns_.Size() < vran.max_cpu_number_)
-      if(batch_app_assigned_cpu_.Size() > 1){
-        Cpu front = batch_app_assigned_cpu_.Front();
-        vran.cpu_assigns_.Set(front);
-        batch_app_assigned_cpu_.Clear(front);
-      } else break;
+    while(vran.cpu_assigns_.Size() < vran.max_cpu_number_
+          && batch_app_assigned_cpu_.Size() > 1) {
+      Cpu front = batch_app_assigned_cpu_.Front();
+      vran.cpu_assigns_.Set(front);
+      batch_app_assigned_cpu_.Clear(front);
+    }
   }
   task->sp = sp;
   task->has_work = sp->HasWork();
@@ -744,47 +741,36 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   const absl::Time now = absl::Now();
 
   // 重新分配CPU
-  // for (int i = 1; i < MAX_VRAN_NUMBER; ++i){
-  //   // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
-  //   // batch_app不算（所有vrans_[0]没有意义）
-    // VranInfo& vran = vrans_[i];
-    // if(likely(vran.available == false))
-      // continue;
-    // printf("queue size %d\n", RunqueueSize(i<<VRAN_ID_MASK));
-  //   if(vran.empty_times_from_last_schduler_ == 0){
-  //     // 若有，分配一个新的CPU
-  //     if(batch_app_assigned_cpu_.size() > 1
-  //       && vran.cpu_assigns_.size() < vran.max_cpu_number_){
-  //       if(cpu_assign_cpu_key_[vran.last_assign_cpus_] == 0){
-  //         vran.cpu_assigns_.emplace_back(vran.last_assign_cpus_);
-  //         cpu_assign_cpu_key_[vran.last_assign_cpus_] = i;
-  //         batch_app_assigned_cpu_.erase(vran.last_assign_cpus_);
-  //       } else {
-  //         auto it = batch_app_assigned_cpu_.begin();
-  //         vran.cpu_assigns_.emplace_back(*it);
-  //         cpu_assign_cpu_key_[*it] = i;
-  //         batch_app_assigned_cpu_.erase(it);
-  //       }
-  //     }
-  //   // 隐含已分配CPU > 1
-  //   } else if (vran.empty_times_from_last_schduler_  > 1){
-  //     // fprintf(stderr, "remove cpu %d\n", empty_time);
-  //     cpu_id_t cpu = vran.cpu_assigns_.back();
-  //     batch_app_assigned_cpu_.insert(cpu);
-  //     cpu_assign_cpu_key_[cpu] = 0;
-  //     vran.last_assign_cpus_ = cpu;
-  //     vran.cpu_assigns_.pop_back();
-  //   }
-  //   vran.empty_times_from_last_schduler_ = 0;
-  // }
-
   for (int i = 1; i < MAX_VRAN_NUMBER; ++i) {
   // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
   // batch_app不算（所有vrans_[0]没有意义）
     VranInfo& vran = vrans_[i];
     if(likely(vran.available == false))
       continue;
+
+    if(vran.empty_times_from_last_schduler_ == 0){
+      // 若有，分配一个新的CPU
+      if(batch_app_assigned_cpu_.Size() > 1
+        && vran.cpu_assigns_.Size() < vran.max_cpu_number_){
+        if(batch_app_assigned_cpu_.IsSet(vran.last_assign_cpus_)){
+          vran.cpu_assigns_.Set(vran.last_assign_cpus_);
+          batch_app_assigned_cpu_.Clear(vran.last_assign_cpus_);
+        } else {
+          Cpu front = batch_app_assigned_cpu_.Front();
+          vran.cpu_assigns_.Set(front);
+          batch_app_assigned_cpu_.Clear(front);
+        }
+      }
+    // 隐含已分配CPU > 1
+    } else if (vran.empty_times_from_last_schduler_  > 1){
+      // fprintf(stderr, "remove cpu %d\n", empty_time);
+      Cpu front = vran.cpu_assigns_.Front();
+      batch_app_assigned_cpu_.Set(front);
+      vran.last_assign_cpus_ = front.id();
+      vran.cpu_assigns_.Clear(front);
+    }
     vran.empty_times_from_last_schduler_ = 0;
+
     // TODO: Refactor this loop
     for (int i = 0; i < 2; i++) {
       CpuList updated_cpus = MachineTopology()->EmptyCpuList();
@@ -830,7 +816,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
         // 不应该出现于vran
         if (to_run->status_word.on_cpu()) {
           // CHECK(vran_id == 0);
-          Yield(to_run, vran_id);
+          Yield(to_run);
           goto again;
         }
 
@@ -974,7 +960,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       // CPU. Make it ineligible for selection in this scheduling round.
       // 不应该出现于vran
       if (to_run->status_word.on_cpu()) {
-        Yield(to_run, vran_id);
+        Yield(to_run);
         goto again1;
       }
 
