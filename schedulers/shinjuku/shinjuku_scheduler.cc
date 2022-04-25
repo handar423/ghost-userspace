@@ -157,7 +157,7 @@ void ShinjukuScheduler::TaskNew(ShinjukuTask* task, const Message& msg) {
   const ghost_msg_payload_task_new* payload =
       static_cast<const ghost_msg_payload_task_new*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  // DCHECK_EQ(payload->runtime, task->status_word.runtime());
 
   UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
                     /* update_elapsed_runtime = */ false);
@@ -216,7 +216,7 @@ void ShinjukuScheduler::TaskBlocked(ShinjukuTask* task, const Message& msg) {
   const ghost_msg_payload_task_blocked* payload =
       reinterpret_cast<const ghost_msg_payload_task_blocked*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  // DCHECK_EQ(payload->runtime, task->status_word.runtime());
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
@@ -240,7 +240,7 @@ void ShinjukuScheduler::TaskPreempted(ShinjukuTask* task, const Message& msg) {
   const ghost_msg_payload_task_preempt* payload =
       reinterpret_cast<const ghost_msg_payload_task_preempt*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  // DCHECK_EQ(payload->runtime, task->status_word.runtime());
 
   task->preempted = true;
   task->prio_boost = true;
@@ -276,7 +276,7 @@ void ShinjukuScheduler::TaskYield(ShinjukuTask* task, const Message& msg) {
   const ghost_msg_payload_task_yield* payload =
       reinterpret_cast<const ghost_msg_payload_task_yield*>(msg.payload());
 
-  DCHECK_EQ(payload->runtime, task->status_word.runtime());
+  // DCHECK_EQ(payload->runtime, task->status_word.runtime());
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task

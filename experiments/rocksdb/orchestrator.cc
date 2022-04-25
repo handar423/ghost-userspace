@@ -167,7 +167,7 @@ void Orchestrator::HandleGet(Request& request, absl::BitGen& gen) {
 
   std::string response;
   Request::Get& get = std::get<Request::Get>(request.work);
-  CHECK(database_.Get(get.entry, response));
+  // CHECK(database_.Get(get.entry, response));
 
   absl::Duration now_duration = GetThreadCpuTime();
   if (now_duration - start_duration < service_time) {
@@ -183,7 +183,7 @@ void Orchestrator::HandleRange(Request& request, absl::BitGen& gen) {
 
   std::string response;
   Request::Range& range = std::get<Request::Range>(request.work);
-  CHECK(database_.RangeQuery(range.start_entry, range.size, response));
+  // CHECK(database_.RangeQuery(range.start_entry, range.size, response));
 
   absl::Duration now_duration = GetThreadCpuTime();
   if (now_duration - start_duration < service_time) {
