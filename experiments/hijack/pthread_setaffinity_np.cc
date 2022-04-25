@@ -15,13 +15,13 @@
 #define CPU_NUM 40
 using ghost_test::Ghost_Status;
 
-static int get_cpu_num(const cpu_set_t *cpuset) {
-    for (int cpu = 0; cpu < CPU_NUM; cpu++) {
-        if (CPU_ISSET(cpu, cpuset)) return cpu;
-    }
-    // default cpu0
-    return 0;
-}
+// static int get_cpu_num(const cpu_set_t *cpuset) {
+//     for (int cpu = 0; cpu < CPU_NUM; cpu++) {
+//         if (CPU_ISSET(cpu, cpuset)) return cpu;
+//     }
+//     // default cpu0
+//     return 0;
+// }
 
 static pthread_setaffinity_np_type old_pthread_setaffinity_np = (pthread_setaffinity_np_type)(dlsym(RTLD_NEXT, "pthread_setaffinity_np"));
 int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize, const cpu_set_t *cpuset) {
@@ -43,11 +43,11 @@ int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize, const cpu_set_t 
     while(Ghost_Status::have_global_init == 0);
     
     // set_affinity
-    int cpunum = get_cpu_num(cpuset);
-    printf("Bind %s onto cpu %d", tname, cpunum);
+    // int cpunum = get_cpu_num(cpuset);
+    // printf("Bind %s onto cpu %d", tname, cpunum);
     ghost::Ghost::SchedSetAffinity(
                 ghost::Gtid::Current(), 
-                ghost::MachineTopology()->ToCpuList(std::vector<int>{cpunum}));
+                ghost::MachineTopology()->ToCpuList(std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9}));
 
     // Ghost Thread initialization
     Ghost_Status::thread_init(sid);
