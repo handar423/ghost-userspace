@@ -248,13 +248,15 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     bool available = false;
 
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
-    uint32_t last_assign_cpus_;
+    uint32_t last_assign_cpus_ = 0;
 
     // 每一类vRAN上一轮为空次数
-    uint32_t empty_times_from_last_schduler_;
+    uint32_t empty_times_from_last_schduler_ = 0;
 
     // 每一类vRAN分配CPU上限
-    uint32_t max_cpu_number_;
+    uint32_t max_cpu_number_ = 0;
+
+    uint32_t busy_times = 0;
 
     CpuList cpu_assigns_;
   };
@@ -357,6 +359,15 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   std::vector<VranInfo> vrans_;
 
   CpuList batch_app_assigned_cpu_;
+
+  // debug用
+  uint32_t scheduling_time = 0;
+
+  uint32_t yield_time = 0;
+
+  uint32_t vran_cpu_number = 0;
+
+  uint32_t vran_sum_number = 0;
 };
 
 // Initializes the task allocator and the Flex scheduler.
