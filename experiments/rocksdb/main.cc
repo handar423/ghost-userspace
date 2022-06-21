@@ -218,7 +218,7 @@ int main(int argc, char* argv[]) {
   // will automatically be affined to
   // 'ghost_test::Orchestrator::kBackgroundThreadCpu'.
   ghost::Ghost::SchedSetAffinity(
-                ghost::Gtid::Current(), ghost::MachineTopology()->all_cores());
+                ghost::Gtid::Current(true), ghost::MachineTopology()->all_cores());
 
   absl::ParseCommandLine(argc, argv);
 

@@ -135,7 +135,7 @@ void GhostOrchestrator::LoadGenerator(uint32_t sid) {
   if (!first_run().Triggered(sid)) {
     CHECK(first_run().Trigger(sid));
     CHECK_EQ(ghost::Ghost::SchedSetAffinity(
-                 ghost::Gtid::Current(),
+                 ghost::Gtid::Current(true),
                  ghost::MachineTopology()->ToCpuList(
                      std::vector<int>{options().load_generator_cpu})),
              0);

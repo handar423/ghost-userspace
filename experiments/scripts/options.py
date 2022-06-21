@@ -36,7 +36,7 @@ _FIRST_ROCKSDB_WORKER_CPU = _FIRST_CPU + 2
 _FIRST_ANTAGONIST_WORKER_CPU = _FIRST_CPU + 1
 # The path to a tmpfs backed by hugepages. This is where the RocksDB,
 # Antagonist, and ghOSt binaries are copied to and run from.
-TMPFS_MOUNT = "/dev/shm"
+TMPFS_MOUNT = "/root/temp-bin"
 
 
 @enum.unique

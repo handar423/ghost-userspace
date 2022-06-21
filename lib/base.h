@@ -30,6 +30,8 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <cstring>
+#include <fstream>
 #include <thread>
 #include <vector>
 
@@ -39,6 +41,10 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "lib/logging.h"
+#include "kernel/ghost_uapi.h"
+
+using std::string;
+using std::fstream;
 
 namespace ghost {
 
@@ -135,13 +141,35 @@ int64_t GetGtid();
 // pid_t some_tid = gtid.tid();
 class Gtid {
  public:
-  Gtid() : gtid_raw_(-1) {}  // Uninitialized.
-  explicit Gtid(int64_t gtid) : gtid_raw_(gtid) {}
+  Gtid() : gtid_raw_(-1), container_tid_(-1) {}  // Uninitialized.
+  explicit Gtid(int64_t gtid, bool check_conatiner_id=false) : gtid_raw_(gtid) {
+    if(!check_conatiner_id){container_tid_ = gtid;}
+    else {
+      char buff[100] = {0};
+
+      fstream infile("/home/ghost_mount_data/proc/" + std::to_string(gtid_raw_ >> GHOST_TID_SEQNUM_BITS) + "/status", std::ios::in);//用读的方式打开
+      if(infile.is_open()){
+        while(!infile.eof())
+        {
+            infile.getline(buff,100);
+            // printf("%s\n", buff);
+            if(strncmp(buff, "NSpid", 5) == 0){
+              // printf("is:%send  %d a%da\n", strrchr(buff, 9), strlen(buff), buff[13]);
+              container_tid_ = atoi(strrchr(buff, 9) + 1);
+              break;
+            }
+        }
+        infile.close();
+      } else {
+        container_tid_ = gtid;
+      }
+    }
+  }
 
   // Returns the GTID for the calling thread.
-  static inline Gtid Current() {
+  static inline Gtid Current(bool check_conatiner_id=false) {
     static thread_local int64_t gtid = GetGtid();
-    return Gtid(gtid);
+    return Gtid(gtid, check_conatiner_id);
   }
 
   // Returns the raw GTID number.
@@ -150,6 +178,8 @@ class Gtid {
   // Returns the TID (thread identifier) associated with the thread that has
   // this GTID.
   pid_t tid() const;
+
+  pid_t container_tid() const {return container_tid_;}
 
   // Returns the TGID (thread group identifier) associated with the thread that
   // has this GTID.
@@ -177,6 +207,7 @@ class Gtid {
  private:
   // The raw GTID number.
   int64_t gtid_raw_;
+  int64_t container_tid_;
 };
 
 // Futex functions. See `man 2 futex` for a description of what a Futex is and

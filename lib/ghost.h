@@ -258,7 +258,7 @@ class Ghost {
   static int SchedGetAffinity(const Gtid& gtid, CpuList& cpulist) {
     cpu_set_t allowed_cpus;
     CPU_ZERO(&allowed_cpus);
-    if (sched_getaffinity(gtid.tid(), sizeof(allowed_cpus), &allowed_cpus)) {
+    if (sched_getaffinity(gtid.container_tid(), sizeof(allowed_cpus), &allowed_cpus)) {
       return -1;
     }
     DCHECK_LE(CPU_COUNT(&allowed_cpus), MAX_CPUS);
@@ -273,10 +273,10 @@ class Ghost {
   // Returns 0 on success. Otherwise, returns -1 with errno set.
   static int SchedSetAffinity(const Gtid& gtid, const CpuList& cpulist) {
     cpu_set_t cpuset = Topology::ToCpuSet(cpulist);
-    return sched_setaffinity(gtid.tid(), sizeof(cpuset), &cpuset);
+    return sched_setaffinity(gtid.container_tid(), sizeof(cpuset), &cpuset);
   }
 
-  static constexpr const char kGhostfsMount[] = "/sys/fs/ghost";
+  static constexpr const char kGhostfsMount[] = "/home/ghost_mount_data/sys/fs/ghost";
 
  private:
   static int gbl_ctl_fd_;

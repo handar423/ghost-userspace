@@ -93,7 +93,7 @@ void CfsOrchestrator::LoadGenerator(uint32_t sid) {
     CHECK(first_run().Trigger(sid));
     CHECK_EQ(sid, kLoadGeneratorSid);
     CHECK_EQ(ghost::Ghost::SchedSetAffinity(
-                 ghost::Gtid::Current(),
+                 ghost::Gtid::Current(true),
                  ghost::MachineTopology()->ToCpuList(
                      std::vector<int>{options().load_generator_cpu})),
              0);
@@ -167,7 +167,7 @@ void CfsOrchestrator::Dispatcher(uint32_t sid) {
     CHECK(first_run().Trigger(sid));
     CHECK_EQ(sid, kDispatcherSid);
     CHECK_EQ(ghost::Ghost::SchedSetAffinity(
-                 ghost::Gtid::Current(),
+                 ghost::Gtid::Current(true),
                  ghost::MachineTopology()->ToCpuList(
                      std::vector<int>{options().cfs_dispatcher_cpu})),
              0);
@@ -232,7 +232,7 @@ void CfsOrchestrator::Worker(uint32_t sid) {
     // The first worker SID is 2, so subtract 2 to get the worker's CPU
     // assignment.
     CHECK_EQ(ghost::Ghost::SchedSetAffinity(
-                 ghost::Gtid::Current(),
+                 ghost::Gtid::Current(true),
                  ghost::MachineTopology()->ToCpuList(
                      std::vector<int>{options().worker_cpus[sid - 2]})),
              0);

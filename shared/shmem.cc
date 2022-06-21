@@ -186,7 +186,7 @@ bool GhostShmem::ConnectShmem(int64_t client_version, const char* suffix,
 
 // static
 int GhostShmem::OpenGhostShmemFd(const char* suffix, pid_t pid) {
-  std::string path = "/proc/" + std::to_string(pid) + "/fd";
+  std::string path = "/home/ghost_mount_data/proc/" + std::to_string(pid) + "/fd";
   std::string needle("/memfd:");
   needle.append(kMemFdPrefix);
   needle.append(suffix);

@@ -45,7 +45,7 @@ void Agent::ThreadBody() {
   }
 
   gtid_ = Gtid::Current();
-  CHECK_EQ(Ghost::SchedSetAffinity(Gtid::Current(),
+  CHECK_EQ(Ghost::SchedSetAffinity(Gtid::Current(true),
                                    MachineTopology()->ToCpuList({cpu_})),
            0);
   enclave_->WaitForOldAgent();
