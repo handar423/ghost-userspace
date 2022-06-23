@@ -797,7 +797,6 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
     vran.busy_times = (!(vran.empty_times_from_last_schduler_)) ? vran.busy_times + 1 : 0;
     vran.empty_times_from_last_schduler_ = 0;
-    vran_sum_number += vran_cpu_number;
 
     // TODO: Refactor this loop
     for (int j = 0; j < 2; j++) {
@@ -911,6 +910,10 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
   }
 
+  vran_sum_number += vran_cpu_number;
+  for(const Cpu& cpu : batch_app_assigned_cpu_)
+    vran_sum_number += (cpu_state(cpu)->current != nullptr);
+
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
     CpuList updated_cpus = MachineTopology()->EmptyCpuList();
@@ -923,7 +926,6 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
 
     again1:
       if (cs->current) {
-        ++vran_sum_number;
         // Approximate the elapsed runtime rather than update the runtime with
         // 'cs->current->UpdateRuntime()' to get the true elapsed runtime from
         // 'cs->current->elapsed_runtime'. Calls to 'UpdateRuntime()' grab the
