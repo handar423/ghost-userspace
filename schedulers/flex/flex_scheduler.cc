@@ -26,13 +26,6 @@
 
 namespace ghost {
 
-static __inline__ unsigned long long GetCycleCount(void)
-{
-        unsigned hi,lo;
-        __asm__ volatile("rdtsc":"=a"(lo),"=d"(hi));
-        return ((unsigned long long)lo)|(((unsigned long long)hi)<<32);
-}
-
 void FlexTask::SetRuntime(absl::Duration new_runtime,
                               bool update_elapsed_runtime) {
   CHECK_GE(new_runtime, runtime);
@@ -59,14 +52,16 @@ void FlexTask::UpdateRuntime() {
 FlexScheduler::FlexScheduler(
     Enclave* enclave, CpuList cpus,
     std::shared_ptr<TaskAllocator<FlexTask>> allocator, int32_t global_cpu,
-    absl::Duration loop_empty_time_slice,
+    absl::Duration empty_time_slice,
     absl::Duration preemption_time_slice)
     : BasicDispatchScheduler(enclave, std::move(cpus), std::move(allocator)),
       global_cpu_(global_cpu),
       global_channel_(GHOST_MAX_QUEUE_ELEMS, /*node=*/0),
-      loop_empty_time_slice_(loop_empty_time_slice),
+      free_empty_time_slice_(empty_time_slice - absl::Microseconds(3)),
+      alloc_empty_time_slice_(empty_time_slice + absl::Microseconds(3)),
       preemption_time_slice_(preemption_time_slice),
       batch_app_assigned_cpu_(MachineTopology()->EmptyCpuList()) {
+
   if (!cpus.IsSet(global_cpu_)) {
     Cpu c = cpus.Front();
     CHECK(c.valid());
@@ -123,8 +118,8 @@ void FlexScheduler::DumpAllTasks() {
 }
 
 void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
-  static unsigned long long scheduling_time_from_last = 0;
-  unsigned long long time_temp = GetCycleCount();
+  static absl::Time scheduling_time_from_last = absl::Now();
+  absl::Time time_temp = absl::Now();
   if (flags & kDumpAllTasks) {
     DumpAllTasks();
   }
@@ -171,16 +166,17 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   fprintf(stderr, "\n");
   
   // 上次开始的scheduling time
-  double time_spend = (time_temp - scheduling_time_from_last) *1.0 / FREQUENCY;
+  int64_t time_spend = (time_temp - scheduling_time_from_last) / absl::Microseconds(1);
+  
   fprintf(stderr, "single scheduling time in us: %.3lf\navg yield in us:%.3lf \nsum CPU:%.3lf\n", 
-          time_spend / scheduling_time, 
-          (time_spend / yield_time), 
+          time_spend * 1.0 / scheduling_time, 
+          (time_spend * 1.0 / yield_time), 
           vran_sum_number * 100.0 / scheduling_time);
 
   yield_time = 0;
   scheduling_time = 0;
   vran_sum_number = 0;
-  scheduling_time_from_last = GetCycleCount();
+  scheduling_time_from_last = absl::Now();
 }
 
 FlexScheduler::CpuState* FlexScheduler::cpu_state_of(
@@ -289,13 +285,12 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   // fprintf(stderr, "one vran %d task end\n", vran_id);
   if (vran_id){
     VranInfo& vran = vrans_[vran_id];
+    --vran_cpu_number;
     if(vran.max_cpu_number_ == 1){
       // fprintf(stderr, "no vran %d task left\n", vran_id);
       batch_app_assigned_cpu_ += vran.cpu_assigns_;
       vran.cpu_assigns_ = MachineTopology()->EmptyCpuList();
       vran.available = false;
-      vran.busy_times = 0;
-      vran_cpu_number = 0;
     } else {
       vran.max_cpu_number_ -= 1;
       // fprintf(stderr, "%d vran %d task left\n", vran_max_cpu_number_[vran_id], vran_id);
@@ -316,7 +311,8 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
 
   // 两者单位一致，此处不处理
   // uint64_t last_ran = payload->runtime - task->last_runtime;
-  vrans_[get_vran_id(task)].empty_times_from_last_schduler_ += 1;
+  ++yield_time;
+  vrans_[get_vran_id(task)].last_empty_time = absl::Now();
   // task->last_runtime = payload->runtime;
   // printf("vran block one task time\n");
 
@@ -384,7 +380,9 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   // 两者单位一致，此处不处理
   // uint64_t last_ran = payload->runtime - task->last_runtime;
   // if(vran_id != 0){
-  vrans_[get_vran_id(task)].empty_times_from_last_schduler_ = 1;
+  ++yield_time;
+  vrans_[get_vran_id(task)].last_empty_time = absl::Now();
+  // vrans_[get_vran_id(task)].empty_times_from_last_schduler_ = 1;
   // }
   // task->last_runtime = payload->runtime;
   // printf("vran %d one task time %ld\n", vran_id, last_ran);
@@ -588,7 +586,7 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     if(vran.available == false){
       vran.available = true;
       vran.max_cpu_number_ = 1;
-      vran.empty_times_from_last_schduler_ = 0;
+      vran.last_empty_time = absl::Now();
     } else {
       vran.max_cpu_number_ += 1;
     }
@@ -764,7 +762,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   ++scheduling_time;
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
-
+  
   // 重新分配CPU
   for (int i = 1; i < MAX_VRAN_NUMBER; ++i) {
   // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
@@ -772,11 +770,11 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     VranInfo& vran = vrans_[i];
     if(likely(vran.available == false))
       continue;
-    yield_time +=vran.empty_times_from_last_schduler_;
+    // yield_time +=vran.empty_times_from_last_schduler_;
     // 若有，分配一个新的CPU
-    if(vran.busy_times > 3 && 
-       vran.empty_times_from_last_schduler_ == 0 && 
-       batch_app_assigned_cpu_.Size() > 1 && 
+    absl::Duration yield_time = now - vran.last_empty_time;
+    if(yield_time > alloc_empty_time_slice_ && 
+       (!batch_app_assigned_cpu_.Empty()) && 
        vran.cpu_assigns_.Size() < vran.max_cpu_number_){
         if(batch_app_assigned_cpu_.IsSet(vran.last_assign_cpus_)){
           vran.cpu_assigns_.Set(vran.last_assign_cpus_);
@@ -787,7 +785,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
           batch_app_assigned_cpu_.Clear(front);
         }
       ++vran_cpu_number;
-    } else if (vran.empty_times_from_last_schduler_ && vran.busy_times < 3 && vran.cpu_assigns_.Size() > 1){
+    } else if (yield_time < free_empty_time_slice_ && vran.cpu_assigns_.Size() > 1){
       // fprintf(stderr, "remove cpu %d\n", empty_time);
       Cpu front = vran.cpu_assigns_.Front();
       batch_app_assigned_cpu_.Set(front);
@@ -795,8 +793,6 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       vran.cpu_assigns_.Clear(front);
       --vran_cpu_number;
     }
-    vran.busy_times = (!(vran.empty_times_from_last_schduler_)) ? vran.busy_times + 1 : 0;
-    vran.empty_times_from_last_schduler_ = 0;
 
     // TODO: Refactor this loop
     for (int j = 0; j < 2; j++) {
@@ -1139,45 +1135,44 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   }
 }
 
-void FlexScheduler::PickNextGlobalCPU(
+bool FlexScheduler::PickNextGlobalCPU(
     StatusWord::BarrierToken agent_barrier) {
+
+  if(batch_app_assigned_cpu_.Empty()) return false;
+      
   // TODO: Select CPUs more intelligently.
-  for (const Cpu& cpu : cpus()) {
-    if (Available(cpu) && cpu.id() != GetGlobalCPUId()) {
-      CpuState* cs = cpu_state(cpu);
-      FlexTask* prev = cs->current;
+  Cpu target_cpu = batch_app_assigned_cpu_.Front();
+  CpuState* cs = cpu_state(target_cpu);
+  FlexTask* prev = cs->current;
 
-      if (prev) {
-        if(prev->vran_id) continue;
-        CHECK(prev->oncpu());
-        // Vacate CPU for running Global agent.
-        UnscheduleTask(prev);
+  if (prev) {
+    CHECK(prev->oncpu());
+    // Vacate CPU for running Global agent.
+    UnscheduleTask(prev);
 
-        // Set 'prio_boost' to make it reschedule asap in case 'prev' is
-        // holding a critical resource (prio_boost also means we can get
-        // away with not updating the task's runtime or sched_deadline).
-        prev->prio_boost = true;
-        Enqueue(prev);
-      }
-
-      batch_app_assigned_cpu_.Set(global_cpu_);
-      batch_app_assigned_cpu_.Clear(cpu);
-      SetGlobalCPU(cpu);
-      enclave()->GetAgent(cpu)->Ping();
-      break;
-    }
+    // Set 'prio_boost' to make it reschedule asap in case 'prev' is
+    // holding a critical resource (prio_boost also means we can get
+    // away with not updating the task's runtime or sched_deadline).
+    prev->prio_boost = true;
+    Enqueue(prev);
   }
+  batch_app_assigned_cpu_.Set(global_cpu_);
+  batch_app_assigned_cpu_.Clear(target_cpu);
+  SetGlobalCPU(target_cpu);
+  enclave()->GetAgent(target_cpu)->Ping();
+
+  return true;
 }
 
 std::unique_ptr<FlexScheduler> SingleThreadFlexScheduler(
     Enclave* enclave, CpuList cpus, int32_t global_cpu,
-    absl::Duration loop_empty_time_slice,
+    absl::Duration empty_time_slice,
     absl::Duration preemption_time_slice) {
   auto allocator =
       std::make_shared<SingleThreadMallocTaskAllocator<FlexTask>>();
   auto scheduler = absl::make_unique<FlexScheduler>(
       enclave, std::move(cpus), std::move(allocator), global_cpu,
-      loop_empty_time_slice, preemption_time_slice);
+      empty_time_slice, preemption_time_slice);
   return scheduler;
 }
 
@@ -1203,8 +1198,10 @@ void FlexAgent::AgentThread() {
       }
       req->LocalYield(agent_barrier, /*flags=*/0);
     } else {
-      if (boosted_priority()) {
-        global_scheduler_->PickNextGlobalCPU(agent_barrier);
+      if (boosted_priority() && global_scheduler_->PickNextGlobalCPU(agent_barrier)) {
+        // 当且仅当有第三方CPU时允许修改global agent
+        // 事实上，也仅仅有vRAN PHY worker进程和第三方应用可能触发这一行为
+        fprintf(stderr, "PickNextGlobalCPU!\n");
         continue;
       }
 

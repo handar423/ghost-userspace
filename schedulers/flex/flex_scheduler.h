@@ -175,7 +175,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   explicit FlexScheduler(
       Enclave* enclave, CpuList cpus,
       std::shared_ptr<TaskAllocator<FlexTask>> allocator,
-      int32_t global_cpu, absl::Duration loop_empty_time_slice,
+      int32_t global_cpu, absl::Duration empty_time_slice,
       absl::Duration preemption_time_slice);
   ~FlexScheduler() final;
 
@@ -225,7 +225,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   // global agent's CPU, the global agent calls this function to try to pick a
   // new CPU to move to and, if a new CPU is found, to initiate the handoff
   // process.
-  void PickNextGlobalCPU(StatusWord::BarrierToken agent_barrier);
+  bool PickNextGlobalCPU(StatusWord::BarrierToken agent_barrier);
 
   // Print debug details about the current tasks managed by the global agent,
   // CPU state, and runqueue stats.
@@ -250,13 +250,16 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
     uint32_t last_assign_cpus_ = 0;
 
+    // 上一次CPU为空的时间
+    absl::Time last_empty_time = absl::Now();
+
     // 每一类vRAN上一轮为空次数
-    uint32_t empty_times_from_last_schduler_ = 0;
+    // uint32_t empty_times_from_last_schduler_ = 0;
 
     // 每一类vRAN分配CPU上限
     uint32_t max_cpu_number_ = 0;
 
-    uint32_t busy_times = 0;
+    // uint32_t busy_times = 0;
 
     CpuList cpu_assigns_;
   };
@@ -351,7 +354,8 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   absl::flat_hash_map<pid_t, std::shared_ptr<FlexOrchestrator>> orchs_;
   const FlexOrchestrator::SchedCallbackFunc kSchedCallbackFunc =
       absl::bind_front(&FlexScheduler::SchedParamsCallback, this);
-  const absl::Duration loop_empty_time_slice_;
+  const absl::Duration free_empty_time_slice_;
+  const absl::Duration alloc_empty_time_slice_;
   const absl::Duration preemption_time_slice_;
 
   //CPU和FlexRAN/Batch的对应关系是按数位计的，存在4个空bit，用的时候把空位去除
@@ -373,7 +377,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 // Initializes the task allocator and the Flex scheduler.
 std::unique_ptr<FlexScheduler> SingleThreadFlexScheduler(
     Enclave* enclave, CpuList cpus, int32_t global_cpu,
-    absl::Duration loop_empty_time_slice,
+    absl::Duration empty_time_slice,
     absl::Duration preemption_time_slice);
 
 // Operates as the Global or Satellite agent depending on input from the
@@ -398,7 +402,7 @@ class FlexConfig : public AgentConfig {
 
   Cpu global_cpu_{Cpu::UninitializedType::kUninitialized};
 
-  absl::Duration loop_empty_time_slice_;
+  absl::Duration empty_time_slice_;
   absl::Duration preemption_time_slice_;
 };
 
@@ -411,7 +415,7 @@ class FullFlexAgent : public FullAgent<ENCLAVE> {
       : FullAgent<ENCLAVE>(config) {
     global_scheduler_ = SingleThreadFlexScheduler(
         &this->enclave_, *this->enclave_.cpus(), config.global_cpu_.id(),
-        config.loop_empty_time_slice_, config.preemption_time_slice_);
+        config.empty_time_slice_, config.preemption_time_slice_);
     this->StartAgentTasks();
     this->enclave_.Ready();
   }

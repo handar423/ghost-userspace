@@ -29,7 +29,7 @@ ABSL_FLAG(int32_t, globalcpu, -1,
           "Global cpu. If -1, then defaults to <firstcpu>)");
 ABSL_FLAG(int32_t, ncpus, 5, "Schedule on <ncpus> starting from <firstcpu>");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
-ABSL_FLAG(int32_t, loop_empty_time_slice, 1,
+ABSL_FLAG(absl::Duration, empty_time_slice, absl::Microseconds(30),
           "time limitation for empty loop");
 // 仅用于batch app
 ABSL_FLAG(absl::Duration, preemption_time_slice, absl::Microseconds(50),
@@ -41,7 +41,6 @@ void ParseFlexConfig(FlexConfig* config) {
   int firstcpu = absl::GetFlag(FLAGS_firstcpu);
   int globalcpu = absl::GetFlag(FLAGS_globalcpu);
   int ncpus = absl::GetFlag(FLAGS_ncpus);
-  int loop_empty_time_slice = absl::GetFlag(FLAGS_loop_empty_time_slice);
   int lastcpu = firstcpu + ncpus - 1;
 
   CHECK_GT(ncpus, 1);
@@ -58,8 +57,6 @@ void ParseFlexConfig(FlexConfig* config) {
   CHECK_GE(globalcpu, firstcpu);
   CHECK_LE(globalcpu, lastcpu);
 
-  CHECK_GE(loop_empty_time_slice, 0);
-
   std::vector<int> all_cpus_v;
   for (int c = firstcpu; c <= lastcpu; c++) {
     all_cpus_v.push_back(c);
@@ -69,7 +66,7 @@ void ParseFlexConfig(FlexConfig* config) {
   config->topology_ = topology;
   config->cpus_ = topology->ToCpuList(std::move(all_cpus_v));
   config->global_cpu_ = topology->cpu(globalcpu);
-  config->loop_empty_time_slice_ = absl::Microseconds(loop_empty_time_slice);
+  config->empty_time_slice_ = absl::GetFlag(FLAGS_empty_time_slice);
   config->preemption_time_slice_ = absl::GetFlag(FLAGS_preemption_time_slice);
 
   std::string enclave = absl::GetFlag(FLAGS_enclave);
