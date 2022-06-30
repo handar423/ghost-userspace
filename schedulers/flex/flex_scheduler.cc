@@ -285,7 +285,6 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   // fprintf(stderr, "one vran %d task end\n", vran_id);
   if (vran_id){
     VranInfo& vran = vrans_[vran_id];
-    --vran_cpu_number;
     if(vran.max_cpu_number_ == 1){
       // fprintf(stderr, "no vran %d task left\n", vran_id);
       batch_app_assigned_cpu_ += vran.cpu_assigns_;
@@ -598,7 +597,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     if(batch_app_assigned_cpu_.Size() > 1) {
       Cpu front = batch_app_assigned_cpu_.Front();
       vran.cpu_assigns_.Set(front);
-      ++vran_cpu_number;
       batch_app_assigned_cpu_.Clear(front);
     }
   }
@@ -784,14 +782,12 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
           vran.cpu_assigns_.Set(front);
           batch_app_assigned_cpu_.Clear(front);
         }
-      ++vran_cpu_number;
     } else if (yield_time < free_empty_time_slice_ && vran.cpu_assigns_.Size() > 1){
       // fprintf(stderr, "remove cpu %d\n", empty_time);
       Cpu front = vran.cpu_assigns_.Front();
       batch_app_assigned_cpu_.Set(front);
       vran.last_assign_cpus_ = front.id();
       vran.cpu_assigns_.Clear(front);
-      --vran_cpu_number;
     }
 
     // TODO: Refactor this loop
@@ -906,9 +902,9 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
   }
 
-  vran_sum_number += vran_cpu_number;
+  vran_sum_number += vrans_[1].cpu_assigns_.Size();
   for(const Cpu& cpu : batch_app_assigned_cpu_)
-    vran_sum_number += (cpu_state(cpu)->current != nullptr);
+    vran_sum_number += (cpu_state(cpu)->current != nullptr && cpu_state(cpu)->current->vran_id == 1);
 
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
