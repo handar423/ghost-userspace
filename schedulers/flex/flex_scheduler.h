@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <map>
+#include <cmath>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/bind_front.h"
@@ -244,24 +245,29 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   class VranInfo {
   public:
     VranInfo():
-      cpu_assigns_(MachineTopology()->EmptyCpuList()){}
+      cpu_assigns_(MachineTopology()->EmptyCpuList()),
+      idle_cpus_(MachineTopology()->EmptyCpuList()){}
     bool available = false;
 
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
-    uint32_t last_assign_cpus_ = 0;
+    // uint32_t last_assign_cpus_ = 0;
 
     // 上一次CPU为空的时间
     absl::Time last_empty_time = absl::Now();
+
+    absl::Duration from_last_empty_time = absl::Microseconds(1000);
 
     // 每一类vRAN上一轮为空次数
     // uint32_t empty_times_from_last_schduler_ = 0;
 
     // 每一类vRAN分配CPU上限
-    uint32_t max_cpu_number_ = 0;
+    int max_cpu_number_ = 0;
 
     // uint32_t busy_times = 0;
 
     CpuList cpu_assigns_;
+
+    CpuList idle_cpus_;
   };
 
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
@@ -371,7 +377,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
   uint32_t vran_cpu_number = 0;
 
-  uint32_t vran_sum_number = 0;
+  uint32_t vran_sum_number[16] = {0};
 };
 
 // Initializes the task allocator and the Flex scheduler.

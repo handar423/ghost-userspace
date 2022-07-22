@@ -157,6 +157,6 @@ def SetUp(binaries: Paths):
     binaries: The paths to copy the binaries to.
   """
   DisableCStates()
-  MountTmpfs()
+  # MountTmpfs()
   MountCgroups()
   CopyBinaries(binaries)

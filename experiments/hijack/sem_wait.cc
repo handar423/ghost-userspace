@@ -19,7 +19,7 @@ int sem_wait(sem_t *sem) {
     //printf("!!!!!!!!!!==== %s enter sem_wait ====!!!!!!!!!!!!\n", tname);
 
     // DEBUG only
-    return old_sem_wait(sem);
+    // return old_sem_wait(sem);
 
     if (std::strncmp("bbupool_rt_", tname, 11) != 0) return old_sem_wait(sem);
     else {

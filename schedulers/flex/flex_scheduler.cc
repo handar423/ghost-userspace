@@ -132,35 +132,35 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
     return;
   }
 
-  fprintf(stderr, "SchedState: ");
-  for (const Cpu& cpu : batch_app_assigned_cpu_) {
-    CpuState* cs = cpu_state(cpu);
-    fprintf(stderr, "%d_0:", cpu.id());
-    if (!cs->current) {
-      fprintf(stderr, "none ");
-    } else {
-      Gtid gtid = cs->current->gtid;
-      absl::FPrintF(stderr, "%s ", gtid.describe());
-    }
-  }
-  for(int i = 1; i < MAX_VRAN_NUMBER; ++i){
-    VranInfo& vran = vrans_[i];
-    if(vran.available == false) continue;
-    for (const Cpu& cpu : vran.cpu_assigns_) {
-      CpuState* cs = cpu_state(cpu);
-      fprintf(stderr, "%d_%u:", cpu.id(), i);
-      if (!cs->current) {
-        fprintf(stderr, "none ");
-      } else {
-        Gtid gtid = cs->current->gtid;
-        absl::FPrintF(stderr, "%s ", gtid.describe());
-      }
-    }
-  }
-  fprintf(stderr, " rq_l_0=%ld", RunqueueSize(0));
+  // fprintf(stderr, "SchedState: ");
+  // for (const Cpu& cpu : batch_app_assigned_cpu_) {
+  //   CpuState* cs = cpu_state(cpu);
+  //   fprintf(stderr, "%d_0:", cpu.id());
+  //   if (!cs->current) {
+  //     fprintf(stderr, "none ");
+  //   } else {
+  //     Gtid gtid = cs->current->gtid;
+  //     absl::FPrintF(stderr, "%s ", gtid.describe());
+  //   }
+  // }
+  // for(int i = 1; i < MAX_VRAN_NUMBER; ++i){
+  //   VranInfo& vran = vrans_[i];
+  //   if(vran.available == false) continue;
+  //   for (const Cpu& cpu : vran.cpu_assigns_) {
+  //     CpuState* cs = cpu_state(cpu);
+  //     fprintf(stderr, "%d_%u:", cpu.id(), i);
+  //     if (!cs->current) {
+  //       fprintf(stderr, "none ");
+  //     } else {
+  //       Gtid gtid = cs->current->gtid;
+  //       absl::FPrintF(stderr, "%s ", gtid.describe());
+  //     }
+  //   }
+  // }
+  // fprintf(stderr, " rq_l_0=%ld", RunqueueSize(0));
   for(int i = 0; i < MAX_VRAN_NUMBER; ++i){
     if (vrans_[i].available)
-      fprintf(stderr, " rq_l_%u=%ld", i, RunqueueSize(i << VRAN_INDEX_OFFSET));
+      fprintf(stderr, "CPU_%u=%f ", i, vran_sum_number[i] * 100.0 / scheduling_time);
   }
 
   fprintf(stderr, "\n");
@@ -168,14 +168,13 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   // 上次开始的scheduling time
   int64_t time_spend = (time_temp - scheduling_time_from_last) / absl::Microseconds(1);
   
-  fprintf(stderr, "single scheduling time in us: %.3lf\navg yield in us:%.3lf \nsum CPU:%.3lf\n", 
+  fprintf(stderr, "single scheduling time in us: %.3lf\navg yield in us:%.3lf \n", 
           time_spend * 1.0 / scheduling_time, 
-          (time_spend * 1.0 / yield_time), 
-          vran_sum_number * 100.0 / scheduling_time);
+          (time_spend * 1.0 / yield_time));
 
   yield_time = 0;
   scheduling_time = 0;
-  vran_sum_number = 0;
+  std::memset(vran_sum_number, 0, sizeof(vran_sum_number));
   scheduling_time_from_last = absl::Now();
 }
 
@@ -310,8 +309,6 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
 
   // 两者单位一致，此处不处理
   // uint64_t last_ran = payload->runtime - task->last_runtime;
-  ++yield_time;
-  vrans_[get_vran_id(task)].last_empty_time = absl::Now();
   // task->last_runtime = payload->runtime;
   // printf("vran block one task time\n");
 
@@ -380,7 +377,10 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   // uint64_t last_ran = payload->runtime - task->last_runtime;
   // if(vran_id != 0){
   ++yield_time;
-  vrans_[get_vran_id(task)].last_empty_time = absl::Now();
+  VranInfo& vran = vrans_[get_vran_id(task)];
+  absl::Time now = absl::Now();
+  vran.from_last_empty_time = now - vran.last_empty_time;
+  vran.last_empty_time = now;
   // vrans_[get_vran_id(task)].empty_times_from_last_schduler_ = 1;
   // }
   // task->last_runtime = payload->runtime;
@@ -394,6 +394,7 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
     UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
                       /* update_elapsed_runtime= */ true);
     CpuState* cs = cpu_state_of(task);
+    vran.idle_cpus_.Set(task->cpu);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
     Yield(task);
@@ -586,6 +587,13 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
       vran.available = true;
       vran.max_cpu_number_ = 1;
       vran.last_empty_time = absl::Now();
+
+      // 若有，分配一个新的CPU
+      if(!batch_app_assigned_cpu_.Empty()) {
+        Cpu front = batch_app_assigned_cpu_.Front();
+        vran.cpu_assigns_.Set(front);
+        batch_app_assigned_cpu_.Clear(front);
+      }
     } else {
       vran.max_cpu_number_ += 1;
     }
@@ -593,12 +601,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     task->vran_id = vran_id;
     fprintf(stderr, "have find %d vran %d task\n", vran.max_cpu_number_, vran_id);
 
-    // 若有，分配一个新的CPU
-    if(batch_app_assigned_cpu_.Size() > 1) {
-      Cpu front = batch_app_assigned_cpu_.Front();
-      vran.cpu_assigns_.Set(front);
-      batch_app_assigned_cpu_.Clear(front);
-    }
   }
   task->sp = sp;
   task->has_work = sp->HasWork();
@@ -760,35 +762,36 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   ++scheduling_time;
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
-  
+
   // 重新分配CPU
-  for (int i = 1; i < MAX_VRAN_NUMBER; ++i) {
+  for (int i_outer = 0; i_outer < MAX_VRAN_NUMBER; ++i_outer) {
+    int i = (scheduling_time + i_outer) & 0xF;
   // 一般来说，认为没有16个vran那么多，测试中应该只有一到两个
   // batch_app不算（所有vrans_[0]没有意义）
     VranInfo& vran = vrans_[i];
     if(likely(vran.available == false))
       continue;
     // yield_time +=vran.empty_times_from_last_schduler_;
-    // 若有，分配一个新的CPU
-    absl::Duration yield_time = now - vran.last_empty_time;
-    if(yield_time > alloc_empty_time_slice_ && 
-       (!batch_app_assigned_cpu_.Empty()) && 
-       vran.cpu_assigns_.Size() < vran.max_cpu_number_){
-        if(batch_app_assigned_cpu_.IsSet(vran.last_assign_cpus_)){
-          vran.cpu_assigns_.Set(vran.last_assign_cpus_);
-          batch_app_assigned_cpu_.Clear(vran.last_assign_cpus_);
-        } else {
+    // 若有，分配新的CPU
+    if(likely(vran.from_last_empty_time != absl::Microseconds(1000))){
+      absl::Duration yield_time = now - vran.last_empty_time;
+      if(yield_time > alloc_empty_time_slice_){
+        int target_extra_cpus = std::min(1, std::max(int(batch_app_assigned_cpu_.Size()) - 1, 0));
+        for(int local_iter = 0; local_iter < target_extra_cpus; ++local_iter){
           Cpu front = batch_app_assigned_cpu_.Front();
           vran.cpu_assigns_.Set(front);
           batch_app_assigned_cpu_.Clear(front);
         }
-    } else if (yield_time < free_empty_time_slice_ && vran.cpu_assigns_.Size() > 1){
-      // fprintf(stderr, "remove cpu %d\n", empty_time);
-      Cpu front = vran.cpu_assigns_.Front();
-      batch_app_assigned_cpu_.Set(front);
-      vran.last_assign_cpus_ = front.id();
-      vran.cpu_assigns_.Clear(front);
+      } else if (vran.from_last_empty_time < free_empty_time_slice_ && (!vran.idle_cpus_.Empty())){
+        // 假设idle_cpus_为空，则引起yield_time的yield对应CPU已经被释放，此时等待下一次缩容机会
+        // fprintf(stderr, "remove cpu %d\n", empty_time);
+        Cpu free_ = vran.idle_cpus_.Front();
+        batch_app_assigned_cpu_.Set(free_);
+        vran.cpu_assigns_.Clear(free_);
+      }
+      vran.idle_cpus_.Clear();
     }
+    vran_sum_number[i] += vrans_[i].cpu_assigns_.Size();
 
     // TODO: Refactor this loop
     for (int j = 0; j < 2; j++) {
@@ -901,10 +904,6 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       }
     }
   }
-
-  vran_sum_number += vrans_[1].cpu_assigns_.Size();
-  for(const Cpu& cpu : batch_app_assigned_cpu_)
-    vran_sum_number += (cpu_state(cpu)->current != nullptr && cpu_state(cpu)->current->vran_id == 1);
 
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
@@ -1218,13 +1217,13 @@ void FlexAgent::AgentThread() {
       global_scheduler_->GlobalSchedule(status_word(), agent_barrier);
 
       if (verbose() && debug_out.Edge()) {
-        static const int flags =
-            verbose() > 1 ? Scheduler::kDumpStateEmptyRQ : 0;
+        // static const int flags =
+        //     verbose() > 1 ? Scheduler::kDumpStateEmptyRQ : 0;
         if (global_scheduler_->debug_runqueue_) {
           global_scheduler_->debug_runqueue_ = false;
           global_scheduler_->DumpState(cpu(), Scheduler::kDumpAllTasks);
         } else {
-          global_scheduler_->DumpState(cpu(), flags);
+          global_scheduler_->DumpState(cpu(), Scheduler::kDumpStateEmptyRQ);
         }
       }
     }

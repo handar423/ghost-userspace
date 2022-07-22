@@ -214,6 +214,10 @@ class CpuList {
   // Clears the bit for CPU `cpu`.
   void Clear(const Cpu& cpu) { Clear(cpu.id()); }
 
+  void Clear() {
+    std::memset(bitmap_, 0, sizeof(bitmap_));
+  }
+
   // Returns true if the bit at index `id` is set, returns false otherwise.
   bool IsSet(uint32_t id) const {
     DCHECK_GE(id, 0);

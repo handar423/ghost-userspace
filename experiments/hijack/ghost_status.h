@@ -9,7 +9,7 @@
 #include "absl/time/time.h"
 
 // the number is set according to the hijacked application 
-#define DEFAULT_WORKER_NUM 20
+#define DEFAULT_WORKER_NUM 40
 #define DEFAULT_QOS 16
 using std::atomic_int;
 using std::mutex;
