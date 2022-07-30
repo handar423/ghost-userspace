@@ -160,6 +160,8 @@ struct FlexTask : public Task {
 
   vRAN_id_t vran_id = 0;
 
+  pid_t local_gid = 0;
+
   // Indicates whether there is a pending deferred unschedule for this task, and
   // if so, whether the unschedule could optionally happen or must happen.
   UnscheduleLevel unschedule_level = UnscheduleLevel::kNoUnschedule;

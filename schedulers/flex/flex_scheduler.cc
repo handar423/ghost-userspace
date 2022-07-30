@@ -114,7 +114,7 @@ void FlexScheduler::DumpAllTasks() {
     return true;
   });
 
-  for (auto const& it : orchs_) it.second->DumpSchedParams();
+  // for (auto const& it : orchs_) it.second->DumpSchedParams();
 }
 
 void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
@@ -227,10 +227,6 @@ void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
   const ghost_msg_payload_task_new* payload =
       static_cast<const ghost_msg_payload_task_new*>(msg.payload());
 
-  DCHECK_LE(payload->runtime, task->status_word.runtime());
-
-  UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
-                    /* update_elapsed_runtime = */ false);
   task->seqnum = msg.seqnum();
   task->run_state = FlexTask::RunState::kBlocked;  // Need this in the
                                                        // runnable case anyway.
@@ -238,6 +234,7 @@ void FlexScheduler::TaskNew(FlexTask* task, const Message& msg) {
   const Gtid gtid(payload->gtid);
   const pid_t tgid = gtid.tgid();
   HandleNewGtid(task, tgid);
+  task->local_gid = tgid;
 
   if (payload->runnable) Enqueue(task);
     
@@ -295,6 +292,7 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
     }
   }
 
+  orchs_.erase(task->local_gid);
   allocator()->FreeTask(task);
 
   num_tasks_--;
@@ -302,23 +300,17 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
 
 // 更新CPU时间
 void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
-  const ghost_msg_payload_task_blocked* payload =
-      reinterpret_cast<const ghost_msg_payload_task_blocked*>(msg.payload());
-
-  DCHECK_LE(payload->runtime, task->status_word.runtime());
+  // const ghost_msg_payload_task_blocked* payload =
+  //     reinterpret_cast<const ghost_msg_payload_task_blocked*>(msg.payload());
 
   // 两者单位一致，此处不处理
-  // uint64_t last_ran = payload->runtime - task->last_runtime;
-  // task->last_runtime = payload->runtime;
-  // printf("vran block one task time\n");
+  // fprintf(stderr, "vran TaskBlocked one task time\n");
 
   // States other than the typical kOnCpu are possible here:
   // We could be kPaused if agent-initiated preemption raced with task
   // blocking (then kPaused and kQueued can move between each other via
   // SCHED_ITEM_RUNNABLE edges).
   if (task->oncpu()) {
-    UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
-                      /* update_elapsed_runtime= */ true);
     CpuState* cs = cpu_state_of(task);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
@@ -331,10 +323,8 @@ void FlexScheduler::TaskBlocked(FlexTask* task, const Message& msg) {
 }
 
 void FlexScheduler::TaskPreempted(FlexTask* task, const Message& msg) {
-  const ghost_msg_payload_task_preempt* payload =
-      reinterpret_cast<const ghost_msg_payload_task_preempt*>(msg.payload());
-
-  DCHECK_LE(payload->runtime, task->status_word.runtime());
+  // const ghost_msg_payload_task_preempt* payload =
+  //     reinterpret_cast<const ghost_msg_payload_task_preempt*>(msg.payload());
 
   task->preempted = true;
   task->prio_boost = true;
@@ -345,8 +335,6 @@ void FlexScheduler::TaskPreempted(FlexTask* task, const Message& msg) {
   // preemption (then kPaused and kQueued can move between each other via
   // SCHED_ITEM_RUNNABLE edges).
   if (task->oncpu()) {
-    UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
-                      /* update_elapsed_runtime= */ true);
     CpuState* cs = cpu_state_of(task);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
@@ -368,10 +356,10 @@ void FlexScheduler::TaskPreempted(FlexTask* task, const Message& msg) {
 
 // 更新CPU时间
 void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
-  const ghost_msg_payload_task_yield* payload =
-      reinterpret_cast<const ghost_msg_payload_task_yield*>(msg.payload());
+  // const ghost_msg_payload_task_yield* payload =
+  //     reinterpret_cast<const ghost_msg_payload_task_yield*>(msg.payload());
 
-  DCHECK_LE(payload->runtime, task->status_word.runtime());
+  // DCHECK_LE(payload->runtime, task->status_word.runtime());
   
   // 两者单位一致，此处不处理
   // uint64_t last_ran = payload->runtime - task->last_runtime;
@@ -391,13 +379,11 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   // yielding (then kPaused and kQueued can move between each other via
   // SCHED_ITEM_RUNNABLE edges).
   if (task->oncpu()) {
-    UpdateTaskRuntime(task, absl::Nanoseconds(payload->runtime),
-                      /* update_elapsed_runtime= */ true);
     CpuState* cs = cpu_state_of(task);
     vran.idle_cpus_.Set(task->cpu);
     CHECK_EQ(cs->current, task);
     cs->current = nullptr;
-    Yield(task);
+    Enqueue(task);
   } else {
     CHECK(task->queued() || task->paused());
   }
@@ -432,8 +418,6 @@ void FlexScheduler::Unyield(FlexTask* task) {
 }
 
 void FlexScheduler::Enqueue(FlexTask* task, bool back) {
-  CHECK_EQ(task->unschedule_level,
-           FlexTask::UnscheduleLevel::kNoUnschedule);
   if (!task->has_work) {
     // We'll re-enqueue when this FlexTask has work to do during periodic
     // scraping of PrioTable.
@@ -460,17 +444,11 @@ FlexTask* FlexScheduler::Dequeue(vRAN_id_t vran_id) {
     std::deque<FlexTask*>& rq = run_queue_[FirstFilledRunqueue()];
     task = rq.front();
     CHECK_NE(task, nullptr);
-    CHECK(task->has_work);
-    CHECK_EQ(task->unschedule_level,
-            FlexTask::UnscheduleLevel::kNoUnschedule);
     rq.pop_front();
   } else {
     std::deque<FlexTask*>& rq = run_queue_[vran_id];
     task = rq.front();
     CHECK_NE(task, nullptr);
-    CHECK(task->has_work);
-    CHECK_EQ(task->unschedule_level,
-            FlexTask::UnscheduleLevel::kNoUnschedule);
     rq.pop_front();
   }
 
@@ -489,9 +467,6 @@ FlexTask* FlexScheduler::Peek(vRAN_id_t vran_id) {
   } else {
     task = run_queue_[vran_id].front();
   }
-  CHECK(task->has_work);
-  CHECK_EQ(task->unschedule_level,
-           FlexTask::UnscheduleLevel::kNoUnschedule);
 
   return task;
 }
@@ -530,7 +505,6 @@ void FlexScheduler::UnscheduleTask(FlexTask* task) {
   CpuState* cs = cpu_state(cpu);
   cs->current = nullptr;
   task->run_state = FlexTask::RunState::kPaused;
-  task->unschedule_level = FlexTask::UnscheduleLevel::kNoUnschedule;
 }
 
 void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
@@ -546,13 +520,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
 
   if (!gtid) {  // empty sched_item.
     return;
-  }
-
-  // Normally, the agent writes the Runnable bit in the PrioTable for
-  // Repeatables (see Case C, below).  However, the old agent may have crashed
-  // before it could set the bit, so we must do it.
-  if (in_discovery_ && orch.Repeating(sp) && !sp->HasWork()) {
-    orch.MakeEngineRunnable(sp);
   }
 
   FlexTask* task = allocator()->GetTask(gtid);
@@ -606,120 +573,26 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
   task->has_work = sp->HasWork();
   task->wcid = sp->GetWorkClass();
 
-  if (had_work) {
-    task->UpdateRuntime();
-    // The runtime for the ghOSt task needs to be updated as the sched item was
-    // repurposed for a different closure. We don't want to bill the new closure
-    // for CPU time that was consumed by the old closure.
-    task->elapsed_runtime = absl::ZeroDuration();
-  }
-
   // A kBlocked task is not affected by any changes to FlexSchedParams.
   if (task->blocked()) {
     return;
   }
 
   // Case#  had_work  has_work    run_state change
-  //  (a)      0         0        none
-  //  (b)      0         1        kPaused -> kQueued
-  //  (c)      1         0        kQueued/kOnCpu -> kPaused
-  //  (d)      1         1        none
-  if (!had_work) {
-    CHECK(
-        task->paused() ||
-        (task->oncpu() && task->unschedule_level ==
-                              FlexTask::UnscheduleLevel::kMustUnschedule));
-    if (task->has_work) {
-      if (task->paused()) {
-        // For repeatables, the orchestrator indicates that it is done polling
-        // via the had_work -> !has_work edge. The agent exclusively generates
-        // the !had_work -> has_work edge when it is time for the orchestrator
-        // to poll again. We permit the latter edge here for expediency when
-        // handling a new task.
-        Enqueue(task);  // case (b).
-      } else if (task->oncpu()) {
-        // We check this above, but do it again here to make it clear to anyone
-        // reading how we get to this branch.
-        CHECK_EQ(task->unschedule_level,
-                 FlexTask::UnscheduleLevel::kMustUnschedule);
-
-        // The task is currently running on the CPU because it had work. It was
-        // then marked as having no work, so the level was set to
-        // `kMustUnschedule`. However, the sched item was updated multiple times
-        // in the stream and on this successive read, we noticed that the sched
-        // item now has work again. As such, this situation is basically the
-        // same as case (d) where the sched item had work and, after its update,
-        // still has work. Thus, set the level to `kCouldUnschedule` since we no
-        // longer need to unschedule this task in `GlobalSchedule` unless there
-        // is an already queued task in the runqueue that needs to take the
-        // place of `task` on the CPU.
-        task->unschedule_level =
-            FlexTask::UnscheduleLevel::kCouldUnschedule;
-      }
-    }
+  //  (a)      0         0        none: never
+  //  (b)      0         1        kPaused -> kQueued: init
+  //  (c)      1         0        kQueued/kOnCpu -> kPaused: never
+  //  (d)      1         1        none: normal
+  if (unlikely(!had_work)) {
+    CHECK(task->paused());
+    Enqueue(task);  // case (b).
     return;  // case (a).
   }
 
-  if (had_work) {
+  if (likely(had_work)) {
     CHECK(!task->paused());
-    if (task->has_work) {  // case (d).
-      if (task->queued()) {
-        // Repeatables should not change their closure, so repeatables should
-        // not travel the had_work -> has_work edge
-        CHECK(!orch.Repeating(task->sp));
-      }
-
-      // Allow the task to be unscheduled in 'GlobalSchedule' so that another
-      // task enqueued on the runqueue may run. Do not unschedule the task if
-      // there is no other queued task to take its place since we would then
-      // unnecessarily unschedule then reschedule 'task'.
-      //
-      // This would add unnecessary overhead:
-      // if (task->oncpu()) {
-      //   UnscheduleTask(task);
-      //   Enqueue(task);
-      // }
-      // ...
-      // ('task' immediately gets rescheduled in the next call to
-      // 'GlobalSchedule' because the runqueue is short enough such that no
-      // queued tasks need to take the place of 'task'.)
-      if (task->oncpu()) {
-        task->unschedule_level =
-            FlexTask::UnscheduleLevel::kCouldUnschedule;
-      }
-    } else {  // case (c).
-      if (task->oncpu()) {
-        // This task must stop running but we defer its unschedule until
-        // `GlobalSchedule`. In `GlobalSchedule` we could pair its unschedule
-        // with a schedule for another runnable task, saving the overhead of a
-        // resched. Furthermore, if this task's sched item was updated more than
-        // once in the stream, it is possible that the final read to the sched
-        // item would indicate the task has work again, making a resched
-        // potentially unnecessary.
-        //
-        // This would add unnecessary overhead:
-        // UnscheduleTask(task);
-        // ...
-        // (1: Some task `task_new` gets scheduled onto the CPU that `task` was
-        // unscheduled from.)
-        // (2: Or the sched item for `task` is updated more than once in the
-        // stream and the final read to the sched item indicates that `task` has
-        // work again and does not need to be unscheduled.)
-        task->unschedule_level = FlexTask::UnscheduleLevel::kMustUnschedule;
-      } else if (task->queued()) {
-        RemoveFromRunqueue(task);
-      } else {
-        CHECK(0);
-      }
-      CHECK(task->paused() ||
-            (task->oncpu() &&
-             task->unschedule_level ==
-                 FlexTask::UnscheduleLevel::kMustUnschedule));
-      if (orch.Repeating(task->sp)) {
-        paused_repeatables_.push_back(task);
-      }
-    }
   }
+  return;  // case (d).
 }
 
 void FlexScheduler::UpdateSchedParams() {
@@ -736,9 +609,7 @@ bool FlexScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
     // Cannot schedule on this CPU.
     return true;
   }
-  if (iteration == 0 && cs->current &&
-      cs->current->unschedule_level <
-          FlexTask::UnscheduleLevel::kMustUnschedule) {
+  if (iteration == 0 && cs->current) {
     // Don't preempt the task on this CPU in the first iteration. We first
     // try to see if there is an idle CPU we can run the next task on. The only
     // exception is if the currently running task must be unscheduled... it is
@@ -760,6 +631,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
                                        StatusWord::BarrierToken agent_sw_last) {
   // List of CPUs with open transactions.
   ++scheduling_time;
+  CpuList updated_cpus = MachineTopology()->EmptyCpuList();
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
 
@@ -776,7 +648,8 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     if(likely(vran.from_last_empty_time != absl::Microseconds(1000))){
       absl::Duration yield_time = now - vran.last_empty_time;
       if(yield_time > alloc_empty_time_slice_){
-        int target_extra_cpus = std::min(1, std::max(int(batch_app_assigned_cpu_.Size()) - 1, 0));
+        int target_extra_cpus = std::min(std::min(1, std::max(int(batch_app_assigned_cpu_.Size()) - 1, 0)),
+                                vran.max_cpu_number_ - int(vran.cpu_assigns_.Size()));
         for(int local_iter = 0; local_iter < target_extra_cpus; ++local_iter){
           Cpu front = batch_app_assigned_cpu_.Front();
           vran.cpu_assigns_.Set(front);
@@ -791,261 +664,57 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       }
       vran.idle_cpus_.Clear();
     }
-    vran_sum_number[i] += vrans_[i].cpu_assigns_.Size();
+    vran_sum_number[i] += vran.cpu_assigns_.Size();
 
     // TODO: Refactor this loop
-    for (int j = 0; j < 2; j++) {
-      CpuList updated_cpus = MachineTopology()->EmptyCpuList();
-      for (const Cpu& cpu : vran.cpu_assigns_) {
-        CpuState* cs = cpu_state(cpu);
-        if (SkipForSchedule(j, cpu)) {
-          continue;
-        }
-        vRAN_id_t vran_id = i << VRAN_INDEX_OFFSET;
-
-      again:
-        if (cs->current) {
-          // Preempt the current task if either:
-          // 1. A higher-priority task wants to run.
-          // 2. The task's unschedule level is at least `kCouldUnschedule`, making
-          // the task eligible for preemption.
-          continue;
-        }
-        FlexTask* to_run = Dequeue(vran_id);
-        if (!to_run) {
-          // No tasks left to schedule.
-          break;
-        }
-
-        // The chosen task was preempted earlier but hasn't gotten off the
-        // CPU. Make it ineligible for selection in this scheduling round.
-        // 不应该出现于vran
-        if (to_run->status_word.on_cpu()) {
-          Yield(to_run);
-          goto again;
-        }
-
-        cs->next = to_run;
-
-        updated_cpus.Set(cpu.id());
+    for (const Cpu& cpu : vran.cpu_assigns_) {
+      CpuState* cs = cpu_state(cpu);
+      if (cs->current) {
+        continue;
       }
 
-      for (const Cpu& cpu : vran.cpu_assigns_) {
-        CpuState* cs = cpu_state(cpu);
-        // Make a copy of the `cs->current` pointer since we need to access the
-        // task after it is unscheduled. `UnscheduleTask` sets `cs->current` to
-        // `nullptr`.
-        FlexTask* task = cs->current;
-        if (task) {
-          if (!cs->next) {
-            if (task->unschedule_level ==
-                FlexTask::UnscheduleLevel::kCouldUnschedule) {
-              // We set the level to `kNoUnschedule` since no task is being
-              // scheduled in place of `task` on `cpu`. We cannot set the level to
-              // `kNoUnschedule` when trying to schedule another task on this
-              // `cpu` because that schedule may fail, so `task` needs to be
-              // directly unscheduled in that case so that `task` does not get
-              // preference over tasks waiting in the runqueue.
-              //
-              // Note that an unschedule is optional for a level of
-              // `kCouldUnschedule`, so we do not initiate an unschedule unlike
-              // below for `kMustUnschedule`.
-              task->unschedule_level =
-                  FlexTask::UnscheduleLevel::kNoUnschedule;
-            } else if (task->unschedule_level ==
-                      FlexTask::UnscheduleLevel::kMustUnschedule) {
-              // `task` must be unscheduled and we have no new task schedule to
-              // pair the unschedule with, so initiate the unschedule directly.
-              UnscheduleTask(task);
-            }
-          }
-
-          // Four cases:
-          //
-          // If there is a new task `cs->next` to run next (i.e., `cs->next` !=
-          // `nullptr`):
-          //   Case 1: If the level is `kCouldUnschedule`, we will attempt the
-          //   schedule below and directly initiate an unschedule of `task` if
-          //   that schedule fails.
-          //
-          //   Case 2: If the level is `kMustUnschedule`, we will attempt the
-          //   schedule below and directly initiate an unschedule of `task` if
-          //   that schedule fails.
-          //
-          // If there is no new task `cs->current` to run next (i.e., `cs->next`
-          // == `nullptr`):
-          //   Case 3: If the level of `task` was `kCouldUnschedule`, we set it to
-          //   `kNoUnschedule` above.
-          //
-          //   Case 4: If the level of `task` was `kMustUnschedule`, we directly
-          //   initiated an unschedule of `task` above. `UnscheduleTask(task)`
-          //   sets the level of `task` to `kNoUnschedule`.
-          CHECK(cs->next || task->unschedule_level ==
-                                FlexTask::UnscheduleLevel::kNoUnschedule);
-        }
+      vRAN_id_t vran_id = i << VRAN_INDEX_OFFSET;
+      FlexTask* to_run = Dequeue(vran_id);
+      if(!to_run){
+        break;
       }
-
-      for (const Cpu& cpu : updated_cpus) {
-        CpuState* cs = cpu_state(cpu);
-
-        FlexTask* next = cs->next;
-        CHECK_NE(next, nullptr);
-
-        if (cs->current == next) continue;
-
-        RunRequest* req = enclave()->GetRunRequest(cpu);
-        req->Open({
-            .target = next->gtid,
-            .target_barrier = next->seqnum,
-            .commit_flags = COMMIT_AT_TXN_COMMIT,
-        });
-
-        open_cpus.Set(cpu.id());
-      }
+      cs->next = to_run;
+      updated_cpus.Set(cpu.id());
     }
   }
 
   // TODO: Refactor this loop
-  for (int i = 0; i < 2; i++) {
-    CpuList updated_cpus = MachineTopology()->EmptyCpuList();
-    for (const Cpu& cpu : batch_app_assigned_cpu_) {
-      CpuState* cs = cpu_state(cpu);
-      if (SkipForSchedule(i, cpu)) {
-        continue;
-      }
-      vRAN_id_t vran_id = 0;
-
-    again1:
-      if (cs->current) {
-        // Approximate the elapsed runtime rather than update the runtime with
-        // 'cs->current->UpdateRuntime()' to get the true elapsed runtime from
-        // 'cs->current->elapsed_runtime'. Calls to 'UpdateRuntime()' grab the
-        // runqueue lock, so calling this for tasks on many CPUs harms tail
-        // latency.
-        absl::Duration elapsed_runtime = now - cs->current->last_ran;
-
-        // Preempt the current task if either:
-        // 1. A higher-priority task wants to run.
-        // 2. The next task to run has the same priority as the current task,
-        // the current task has used up its time slice, and the current task is
-        // not a repeatable.
-        // 3. The task's unschedule level is at least `kCouldUnschedule`, making
-        // the task eligible for preemption.
-        FlexTask* peek = Peek(vran_id);
-        bool should_preempt = false;
-        if (peek) {
-          uint32_t current_qos = cs->current->sp->GetQoS();
-          uint32_t peek_qos = peek->sp->GetQoS();
-
-          // 当且仅当batch被vran抢占
-          if (current_qos < peek_qos) {
-            should_preempt = true;
-          } else if (current_qos == peek_qos) {
-            if (elapsed_runtime >= preemption_time_slice_ &&
-                cs->current->orch &&
-                !cs->current->orch->Repeating(cs->current->sp)) {
-              should_preempt = true;
-            } else if (cs->current->unschedule_level >=
-                       FlexTask::UnscheduleLevel::kCouldUnschedule) {
-              should_preempt = true;
-            }
-          }
-        }
-        if (!should_preempt) {
-          continue;
-        }
-      }
-      FlexTask* to_run = Dequeue(vran_id);
-      if (!to_run) {
-        // No tasks left to schedule.
-        break;
-      }
-
-      // The chosen task was preempted earlier but hasn't gotten off the
-      // CPU. Make it ineligible for selection in this scheduling round.
-      // 不应该出现于vran
-      if (to_run->status_word.on_cpu()) {
-        Yield(to_run);
-        goto again1;
-      }
-
-      cs->next = to_run;
-
-      updated_cpus.Set(cpu.id());
+  // for batch app
+  for (const Cpu& cpu : batch_app_assigned_cpu_) {
+    CpuState* cs = cpu_state(cpu);
+    if (cs->current) {
+      continue;
     }
 
-    for (const Cpu& cpu : batch_app_assigned_cpu_) {
-      CpuState* cs = cpu_state(cpu);
-      // Make a copy of the `cs->current` pointer since we need to access the
-      // task after it is unscheduled. `UnscheduleTask` sets `cs->current` to
-      // `nullptr`.
-      FlexTask* task = cs->current;
-      if (task) {
-        if (!cs->next) {
-          if (task->unschedule_level ==
-              FlexTask::UnscheduleLevel::kCouldUnschedule) {
-            // We set the level to `kNoUnschedule` since no task is being
-            // scheduled in place of `task` on `cpu`. We cannot set the level to
-            // `kNoUnschedule` when trying to schedule another task on this
-            // `cpu` because that schedule may fail, so `task` needs to be
-            // directly unscheduled in that case so that `task` does not get
-            // preference over tasks waiting in the runqueue.
-            //
-            // Note that an unschedule is optional for a level of
-            // `kCouldUnschedule`, so we do not initiate an unschedule unlike
-            // below for `kMustUnschedule`.
-            task->unschedule_level =
-                FlexTask::UnscheduleLevel::kNoUnschedule;
-          } else if (task->unschedule_level ==
-                     FlexTask::UnscheduleLevel::kMustUnschedule) {
-            // `task` must be unscheduled and we have no new task schedule to
-            // pair the unschedule with, so initiate the unschedule directly.
-            UnscheduleTask(task);
-          }
-        }
-
-        // Four cases:
-        //
-        // If there is a new task `cs->next` to run next (i.e., `cs->next` !=
-        // `nullptr`):
-        //   Case 1: If the level is `kCouldUnschedule`, we will attempt the
-        //   schedule below and directly initiate an unschedule of `task` if
-        //   that schedule fails.
-        //
-        //   Case 2: If the level is `kMustUnschedule`, we will attempt the
-        //   schedule below and directly initiate an unschedule of `task` if
-        //   that schedule fails.
-        //
-        // If there is no new task `cs->current` to run next (i.e., `cs->next`
-        // == `nullptr`):
-        //   Case 3: If the level of `task` was `kCouldUnschedule`, we set it to
-        //   `kNoUnschedule` above.
-        //
-        //   Case 4: If the level of `task` was `kMustUnschedule`, we directly
-        //   initiated an unschedule of `task` above. `UnscheduleTask(task)`
-        //   sets the level of `task` to `kNoUnschedule`.
-        CHECK(cs->next || task->unschedule_level ==
-                              FlexTask::UnscheduleLevel::kNoUnschedule);
-      }
+    FlexTask* to_run = Dequeue(0);
+    if(!to_run){
+      break;
     }
+    cs->next = to_run;
+    updated_cpus.Set(cpu.id());
+  }
 
-    for (const Cpu& cpu : updated_cpus) {
-      CpuState* cs = cpu_state(cpu);
+  for (const Cpu& cpu : updated_cpus) {
+    CpuState* cs = cpu_state(cpu);
 
-      FlexTask* next = cs->next;
-      CHECK_NE(next, nullptr);
+    FlexTask* next = cs->next;
+    CHECK_NE(next, nullptr);
 
-      if (cs->current == next) continue;
+    if (unlikely(cs->current == next)) continue;
 
-      RunRequest* req = enclave()->GetRunRequest(cpu);
-      req->Open({
-          .target = next->gtid,
-          .target_barrier = next->seqnum,
-          .commit_flags = COMMIT_AT_TXN_COMMIT,
-      });
+    RunRequest* req = enclave()->GetRunRequest(cpu);
+    req->Open({
+        .target = next->gtid,
+        .target_barrier = next->seqnum,
+        .commit_flags = COMMIT_AT_TXN_COMMIT,
+    });
 
-      open_cpus.Set(cpu.id());
-    }
+    open_cpus.Set(cpu.id());
   }
 
   if (!open_cpus.Empty()) {
@@ -1060,20 +729,6 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     RunRequest* req = enclave()->GetRunRequest(cpu);
     DCHECK(req->committed());
     if (req->state() == GHOST_TXN_COMPLETE) {
-      if (cs->current) {
-        FlexTask* prev = cs->current;
-        CHECK(prev->oncpu());
-
-        // The schedule succeeded, so `prev` was unscheduled.
-        prev->unschedule_level = FlexTask::UnscheduleLevel::kNoUnschedule;
-
-        // Update runtime of the preempted task.
-        prev->UpdateRuntime();
-
-        // Enqueue the preempted task so it is eligible to be picked again.
-        Enqueue(prev);
-      }
-
       // FlexTask latched successfully; clear state from an earlier run.
       //
       // Note that 'preempted' influences a task's run_queue position
@@ -1083,51 +738,12 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       next->cpu = cpu.id();
       next->preempted = false;
       next->prio_boost = false;
-      // Clear the elapsed runtime so that the preemption timer is reset for
-      // this task
-      next->elapsed_runtime = absl::ZeroDuration();
-      next->last_ran = absl::Now();
     } else {
       // Need to requeue in the stale case.
       Enqueue(next, /* back = */ false);
-      if (cs->current && cs->current->unschedule_level >=
-                             FlexTask::UnscheduleLevel::kCouldUnschedule) {
-        // TODO: Add a commit option that will idle the CPU if a ghOSt
-        // task is currently running on the CPU and a transaction to run a new
-        // task on that CPU fails. This will allow us to get the desired
-        // behavior here without the overhead of calling
-        // `UnscheduleTask(cs->current)`.
-        UnscheduleTask(cs->current);
-      }
     }
   }
 
-  // Yielding tasks are moved back to the runqueue having skipped one round
-  // of scheduling decisions.
-  if (!yielding_tasks_.empty()) {
-    for (FlexTask* t : yielding_tasks_) {
-      CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);
-      Enqueue(t);
-    }
-    yielding_tasks_.clear();
-  }
-  // Check to see if any repeatables are eligible to run
-  for (auto it = paused_repeatables_.begin();
-       it != paused_repeatables_.end();) {
-    FlexTask* task = *it;
-    CHECK_NE(task->orch, nullptr);
-    absl::Duration wait = absl::Now() - task->last_ran;
-    if (wait >= task->orch->GetWorkClassPeriod(task->sp->GetWorkClass())) {
-      // The repeatable should run again
-      task->orch->MakeEngineRunnable(task->sp);
-      task->has_work = true;
-      Enqueue(task);
-      // 'erase' returns an iterator to the next element in the vector
-      it = paused_repeatables_.erase(it);
-    } else {
-      it++;
-    }
-  }
 }
 
 bool FlexScheduler::PickNextGlobalCPU(
