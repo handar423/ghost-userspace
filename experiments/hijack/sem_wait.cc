@@ -31,7 +31,7 @@ int sem_wait(sem_t *sem) {
             Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
         } else {
             si.empty_time += 1;
-            printf("si.empty_time %d\n", si.empty_time);
+            // printf("si.empty_time %d\n", si.empty_time);
             Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
         }
         sched_yield();

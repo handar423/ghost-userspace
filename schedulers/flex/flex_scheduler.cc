@@ -367,9 +367,9 @@ void FlexScheduler::TaskYield(FlexTask* task, const Message& msg) {
   // if(vran_id != 0){
   ++yield_time;
   VranInfo& vran = vrans_[get_vran_id(task)];
-  absl::Time now = absl::Now();
-  vran.from_last_empty_time = now - vran.last_empty_time;
-  vran.last_empty_time = now;
+  // absl::Time now = absl::Now();
+  // vran.from_last_empty_time = now - vran.last_empty_time;
+  // vran.last_empty_time = now;
   // vrans_[get_vran_id(task)].empty_times_from_last_schduler_ = 1;
   // }
   // task->last_runtime = payload->runtime;
@@ -635,6 +635,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   ++scheduling_time;
   CpuList updated_cpus = MachineTopology()->EmptyCpuList();
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
+  static absl::Time last_schedule = absl::Now();
   const absl::Time now = absl::Now();
 
   // 重新分配CPU
@@ -647,9 +648,14 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       continue;
     // yield_time +=vran.empty_times_from_last_schduler_;
     // 若有，分配新的CPU
-    if(likely(vran.from_last_empty_time != absl::Microseconds(1000))){
-      absl::Duration yield_time = now - vran.last_empty_time;
-      if(yield_time > alloc_empty_time_slice_){
+    if(likely(vran.init_flag)){
+      if(vran.empty_times_from_last_schduler >= 1){
+        vran.from_last_empty_time = (now - last_schedule) / (vran.empty_times_from_last_schduler + 1);
+        vran.last_empty_time = now - vran.from_last_empty_time;
+      } else {
+        vran.from_last_empty_time = now - vran.last_empty_time;
+      }
+      if(vran.from_last_empty_time > alloc_empty_time_slice_){
         int target_extra_cpus = std::min(std::min(1, std::max(int(batch_app_assigned_cpu_.Size()) - 1, 0)),
                                 vran.max_cpu_number_ - int(vran.cpu_assigns_.Size()));
         for(int local_iter = 0; local_iter < target_extra_cpus; ++local_iter){
@@ -746,6 +752,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
   }
 
+  last_schedule = now;
 }
 
 bool FlexScheduler::PickNextGlobalCPU(
