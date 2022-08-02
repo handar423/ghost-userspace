@@ -84,6 +84,8 @@ class Ghost {
   // counter synchronization ensures that the agent only reads sched items in a
   // consistent state.
   void SetSchedItem(uint32_t sid, const ghost::sched_item& si);
+  // 这个是为了更新empty point次数的
+  void SetSchedEmptyUnsafe(uint32_t sid, const ghost::sched_item& si);
   // Marks 'sid' as runnable.
   void MarkRunnable(uint32_t sid);
   // Marks 'sid' as idle.

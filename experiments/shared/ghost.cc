@@ -36,12 +36,24 @@ void Ghost::CopySchedItem(ghost::sched_item& dst,
   dst.gpid = src.gpid;
   dst.flags = src.flags;
   dst.deadline = src.deadline;
+  dst.empty_time = src.empty_time;
+  dst.yield_flag = src.yield_flag;
 }
 
 void Ghost::GetSchedItem(uint32_t sid, ghost::sched_item& si) const {
   CheckSchedItemInRange(sid);
 
   CopySchedItem(si, *table_.sched_item(sid));
+}
+
+void Ghost::SetSchedEmptyUnsafe(uint32_t sid, const ghost::sched_item& si) {
+  CHECK_EQ(sid, si.sid);
+  CheckSchedItemInRange(si.sid);
+  CheckWorkClassInRange(si.wcid);
+
+  ghost::sched_item* curr = table_.sched_item(sid);
+  curr->yield_flag = si.yield_flag;
+  curr->empty_time = si.empty_time;
 }
 
 void Ghost::SetSchedItem(uint32_t sid, const ghost::sched_item& si) {

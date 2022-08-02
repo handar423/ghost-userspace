@@ -58,6 +58,8 @@ struct sched_item {
   uint32_t wcid;  /* unique identifier for work class */
   uint64_t gpid;  /* unique identifier for thread */
   uint32_t flags; /* schedulable attributes */
+  uint32_t yield_flag; // 若为真，意味着程序应该yield并放弃CPU，在放弃CPU之前应该将此位归零
+  uint32_t empty_time;
   seqcount_t seqcount;
   uint64_t deadline; /* deadline in ns (relative to the Unix epoch) */
 } ABSL_CACHELINE_ALIGNED;
