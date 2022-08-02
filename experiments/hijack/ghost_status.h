@@ -9,6 +9,7 @@
 #include "absl/time/time.h"
 
 // the number is set according to the hijacked application 
+extern thread_local int sid;
 #define DEFAULT_WORKER_NUM 40
 #define DEFAULT_QOS 16
 using std::atomic_int;

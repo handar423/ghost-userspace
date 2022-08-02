@@ -35,7 +35,7 @@ int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize, const cpu_set_t 
     assert(Ghost_Status::thread_num != Ghost_Status::worker_num);
 
     // Ghost initialization
-    int sid = Ghost_Status::thread_num.fetch_add(1);
+    sid = Ghost_Status::thread_num.fetch_add(1);
     if(sid == 0){
         Ghost_Status::global_init();
     }

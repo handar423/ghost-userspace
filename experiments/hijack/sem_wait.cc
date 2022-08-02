@@ -14,14 +14,14 @@ using ghost_test::Ghost_Status;
 
 static sem_op_type old_sem_wait = (sem_op_type)(dlsym(RTLD_NEXT, "sem_wait"));
 int sem_wait(sem_t *sem) {
-    char tname[80];
-    prctl(PR_GET_NAME, tname);
+    // char tname[80];
+    // prctl(PR_GET_NAME, tname);
     //printf("!!!!!!!!!!==== %s enter sem_wait ====!!!!!!!!!!!!\n", tname);
 
     // DEBUG only
     // return old_sem_wait(sem);
 
-    if (std::strncmp("bbupool_rt_", tname, 11) != 0) return old_sem_wait(sem);
+    if (sid == -1) return old_sem_wait(sem);
     else {
         // Yield to scheduler
         sched_yield();
