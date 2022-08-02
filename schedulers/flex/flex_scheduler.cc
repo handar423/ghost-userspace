@@ -598,6 +598,7 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
 void FlexScheduler::UpdateSchedParams() {
   for (auto& scraper : orchs_) {
     scraper.second->RefreshSchedParams(kSchedCallbackFunc);
+    RefreshSchedEmptyTimes(scraper.second);
   }
 }
 
@@ -842,6 +843,35 @@ void FlexAgent::AgentThread() {
           global_scheduler_->DumpState(cpu(), Scheduler::kDumpStateEmptyRQ);
         }
       }
+    }
+  }
+}
+
+void FlexScheduler::RefreshSchedEmptyTimes(std::shared_ptr<ghost::FlexOrchestrator> orch){
+  struct sched_item* si = orch->table_.sched_item(0);
+  const struct work_class* wc = orch->table_.work_class(si->wcid);
+  int vran_id = wc->id;
+  if(vran_id){
+    FlexScheduler::VranInfo& vran = vrans_[vran_id];
+    vran.empty_times_from_last_schduler = 0;
+    for (Cpu cpu: vran.cpu_assigns_){
+      FlexTask* task = cpu_state(cpu)->current;
+      if(task){
+        int sid = task->sp->GetSID();
+        // printf("sid %d si->wcid %d\n", sid, si->wcid);
+        struct sched_item* si_local = orch->table_.sched_item(sid);
+        int temp_history_empty_time = vran.history_empty_time[sid];
+        if(likely(si_local->empty_time >= temp_history_empty_time)){
+          vran.empty_times_from_last_schduler += si_local->empty_time - temp_history_empty_time;
+        } else {
+          vran.empty_times_from_last_schduler += si_local->empty_time;
+        }
+        vran.history_empty_time[sid] = si_local->empty_time;
+      }
+    }
+    if(likely(vran.empty_times_from_last_schduler > 0)){
+      printf("vran.empty_times_from_last_schduler %d\n", vran.empty_times_from_last_schduler);
+      vran.init_flag = 1;
     }
   }
 }
