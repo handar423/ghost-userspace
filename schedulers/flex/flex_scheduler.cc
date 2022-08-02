@@ -274,6 +274,7 @@ void FlexScheduler::TaskRunnable(FlexTask* task, const Message& msg) {
 void FlexScheduler::TaskDeparted(FlexTask* task, const Message& msg) {}
 
 void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
+  fprintf(stderr, "hello task dead\n");
   CHECK_EQ(task->run_state,
            FlexTask::RunState::kBlocked);  // Need to schedule to exit.
 
@@ -282,17 +283,17 @@ void FlexScheduler::TaskDead(FlexTask* task, const Message& msg) {
   if (vran_id){
     VranInfo& vran = vrans_[vran_id];
     if(vran.max_cpu_number_ == 1){
-      // fprintf(stderr, "no vran %d task left\n", vran_id);
+      fprintf(stderr, "no vran %d task left\n", vran_id);
       batch_app_assigned_cpu_ += vran.cpu_assigns_;
       vran.cpu_assigns_ = MachineTopology()->EmptyCpuList();
       vran.available = false;
+      orchs_.erase(task->local_gid);
     } else {
       vran.max_cpu_number_ -= 1;
       // fprintf(stderr, "%d vran %d task left\n", vran_max_cpu_number_[vran_id], vran_id);
     }
   }
 
-  orchs_.erase(task->local_gid);
   allocator()->FreeTask(task);
 
   num_tasks_--;
@@ -870,7 +871,6 @@ void FlexScheduler::RefreshSchedEmptyTimes(std::shared_ptr<ghost::FlexOrchestrat
       }
     }
     if(likely(vran.empty_times_from_last_schduler > 0)){
-      printf("vran.empty_times_from_last_schduler %d\n", vran.empty_times_from_last_schduler);
       vran.init_flag = 1;
     }
   }
