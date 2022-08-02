@@ -23,7 +23,17 @@ int sem_wait(sem_t *sem) {
 
     if (sid == -1) return old_sem_wait(sem);
     else {
-        // Yield to scheduler
+        ghost::sched_item si;
+        Ghost_Status::ghost_.GetSchedItem(sid, si);
+        if(si.yield_flag){
+            si.empty_time = 0;
+            si.yield_flag = 0;
+            Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
+        } else {
+            si.empty_time += 1;
+            printf("si.empty_time %d\n", si.empty_time);
+            Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
+        }
         sched_yield();
     }
     return 0;
