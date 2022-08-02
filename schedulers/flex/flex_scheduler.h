@@ -38,6 +38,9 @@ namespace ghost {
 typedef uint32_t vRAN_id_t;
 typedef int32_t cpu_id_t;
 
+class FlexOrchestrator;
+class FlexSchedParams;
+
 // Store information about a scheduled task.
 struct FlexTask : public Task {
   enum class RunState {
@@ -174,6 +177,7 @@ struct FlexTask : public Task {
 // low-latency app a high QoS class and an antagonist (that consumes CPU cycles)
 // a low QoS class.
 class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
+  friend class FlexOrchestrator;
  public:
   explicit FlexScheduler(
       Enclave* enclave, CpuList cpus,
@@ -230,6 +234,9 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   // process.
   bool PickNextGlobalCPU(StatusWord::BarrierToken agent_barrier);
 
+  // 更新vRAN empty次数
+  void RefreshSchedEmptyTimes(std::shared_ptr<ghost::FlexOrchestrator> orch);
+
   // Print debug details about the current tasks managed by the global agent,
   // CPU state, and runqueue stats.
   void DumpState(const Cpu& cpu, int flags) final;
@@ -248,6 +255,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   public:
     VranInfo():
       cpu_assigns_(MachineTopology()->EmptyCpuList()),
+      extra_cpus_(MachineTopology()->EmptyCpuList()),
       idle_cpus_(MachineTopology()->EmptyCpuList()){}
     bool available = false;
 
@@ -259,8 +267,11 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
     absl::Duration from_last_empty_time = absl::Microseconds(1000);
 
-    // 每一类vRAN上一轮为空次数
-    // uint32_t empty_times_from_last_schduler_ = 0;
+    // 每一类vRAN上一轮轮空次数
+    uint32_t empty_times_from_last_schduler = 0;
+
+    // 每一类vRAN历史轮空次数
+    absl::flat_hash_map<uint32_t, uint32_t> history_empty_time;
 
     // 每一类vRAN分配CPU上限
     int max_cpu_number_ = 0;
@@ -269,8 +280,12 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
     CpuList cpu_assigns_;
 
+    CpuList extra_cpus_;
+
+    uint32_t init_flag = 0;
+
     CpuList idle_cpus_;
-  };
+  } ABSL_CACHELINE_ALIGNED;
 
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
   // currently running on a CPU.

@@ -116,6 +116,8 @@ class FlexSchedParams {
 // Manages communication with the scheduled application via the PrioTable.
 // To use, construct the class and call 'Init' with the application's PID.
 class FlexOrchestrator {
+ friend class FlexTask;
+ friend class FlexScheduler;
  public:
   typedef std::function<void(FlexOrchestrator& orch,
                              const FlexSchedParams* sp, Gtid oldGtid)>
