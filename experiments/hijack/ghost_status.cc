@@ -2,6 +2,9 @@
 #include <stdio.h>
 using std::getenv;
 
+// 线程间静态变量，sid
+thread_local int sid = -1;
+
 namespace ghost_test {
 
 namespace {
@@ -18,7 +21,7 @@ atomic_int Ghost_Status::thread_num(0);
 mutex Ghost_Status::thread_init_mutex;
 int Ghost_Status::worker_num(DEFAULT_WORKER_NUM);
 int Ghost_Status::qos(DEFAULT_QOS);
-Ghost Ghost_Status::ghost_(DEFAULT_WORKER_NUM, 1);
+Ghost Ghost_Status::ghost_(DEFAULT_WORKER_NUM, 10);
 
 const absl::Duration Ghost_Status::deadline = absl::Microseconds(100);
 
@@ -33,8 +36,8 @@ void Ghost_Status::global_init(){
     fprintf(stderr, "qos: %d\n", qos);
     // initialize ghost 
     ghost::work_class wc;
-    ghost_.GetWorkClass(kWorkClassIdentifier, wc);
-    wc.id = kWorkClassIdentifier;
+    ghost_.GetWorkClass(qos / 16, wc);
+    wc.id = qos / 16;
     wc.flags = WORK_CLASS_ONESHOT;
     wc.qos = qos;
     // Write the max unsigned 64-bit integer as the deadline just in case we want
@@ -44,22 +47,25 @@ void Ghost_Status::global_init(){
     // 'period' is irrelevant because all threads scheduled by ghOSt are
     // one-shots.
     wc.period = 0;
-    ghost_.SetWorkClass(kWorkClassIdentifier, wc);
+    ghost_.SetWorkClass(qos / 16, wc);
     have_global_init = 1;
     printf("global_init finished\n");
 }
 
 void Ghost_Status::thread_init(int sid){
+    printf("thread sid %d init\n", sid);
     ghost::GhostThread::SetGlobalEnclaveCtlFdOnce();
     ghost::Gtid gtid_ = ghost::Gtid::Current();
     ghost::sched_item si;
     ghost_.GetSchedItem(sid, si);
     //printf("thread sid %d get scheditem\n", sid);
     si.sid = sid;
-    si.wcid = kWorkClassIdentifier;
+    si.wcid = qos / 16;
     si.gpid = gtid_.id();
     si.flags |= SCHED_ITEM_RUNNABLE;
     si.deadline = 0;
+    si.empty_time = 0;
+    si.yield_flag = 0;
     ghost_.SetSchedItem(sid, si);
     //printf("thread sid %d set scheditem\n", sid);
     const int ret = ghost::SchedTaskEnterGhost(/*pid=*/0);
