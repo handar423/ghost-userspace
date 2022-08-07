@@ -28,13 +28,13 @@ int sem_wait(sem_t *sem) {
         if(si.yield_flag){
             si.empty_time = 0;
             si.yield_flag = 0;
+            sched_yield();
             Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
         } else {
             si.empty_time += 1;
             // printf("si.empty_time %d\n", si.empty_time);
             Ghost_Status::ghost_.SetSchedEmptyUnsafe(sid, si);
         }
-        sched_yield();
     }
     return 0;
 }

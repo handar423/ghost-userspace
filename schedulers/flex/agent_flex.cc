@@ -29,10 +29,13 @@ ABSL_FLAG(int32_t, globalcpu, -1,
           "Global cpu. If -1, then defaults to <firstcpu>)");
 ABSL_FLAG(int32_t, ncpus, 5, "Schedule on <ncpus> starting from <firstcpu>");
 ABSL_FLAG(std::string, enclave, "", "Connect to preexisting enclave directory");
-ABSL_FLAG(absl::Duration, empty_time_slice, absl::Microseconds(30),
+ABSL_FLAG(absl::Duration, add_core_limitation, absl::Microseconds(30),
           "time limitation for empty loop");
 // 仅用于batch app
-ABSL_FLAG(absl::Duration, preemption_time_slice, absl::Microseconds(50),
+ABSL_FLAG(absl::Duration, free_core_limitation, absl::Nanoseconds(1000),
+          "preemption time slice");
+
+ABSL_FLAG(absl::Duration, free_core_frequency_limitation, absl::Microseconds(50),
           "preemption time slice");
 
 namespace ghost {
@@ -66,8 +69,9 @@ void ParseFlexConfig(FlexConfig* config) {
   config->topology_ = topology;
   config->cpus_ = topology->ToCpuList(std::move(all_cpus_v));
   config->global_cpu_ = topology->cpu(globalcpu);
-  config->empty_time_slice_ = absl::GetFlag(FLAGS_empty_time_slice);
-  config->preemption_time_slice_ = absl::GetFlag(FLAGS_preemption_time_slice);
+  config->add_core_limitation_ = absl::GetFlag(FLAGS_add_core_limitation);
+  config->free_core_limitation_ = absl::GetFlag(FLAGS_free_core_limitation);
+  config->free_core_frequency_limitation_ = absl::GetFlag(FLAGS_free_core_frequency_limitation);
 
   std::string enclave = absl::GetFlag(FLAGS_enclave);
   if (!enclave.empty()) {

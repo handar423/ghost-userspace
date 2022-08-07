@@ -182,8 +182,8 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   explicit FlexScheduler(
       Enclave* enclave, CpuList cpus,
       std::shared_ptr<TaskAllocator<FlexTask>> allocator,
-      int32_t global_cpu, absl::Duration empty_time_slice,
-      absl::Duration preemption_time_slice);
+      int32_t global_cpu, absl::Duration add_core_limitation,
+      absl::Duration free_core_limitation, absl::Duration free_core_frequency_limitation);
   ~FlexScheduler() final;
 
   void EnclaveReady() final;
@@ -255,8 +255,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
   public:
     VranInfo():
       cpu_assigns_(MachineTopology()->EmptyCpuList()),
-      extra_cpus_(MachineTopology()->EmptyCpuList()),
-      idle_cpus_(MachineTopology()->EmptyCpuList()){}
+      extra_cpus_(MachineTopology()->EmptyCpuList()){}
     bool available = false;
 
     // vRAN上一次缩容时的对应的CPU（扩容时优先考虑最新退出的CPU）
@@ -284,7 +283,7 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 
     uint32_t init_flag = 0;
 
-    CpuList idle_cpus_;
+    absl::Time last_free_time = absl::Now();
   } ABSL_CACHELINE_ALIGNED;
 
   // Stop 'task' from running and schedule nothing in its place. 'task' must be
@@ -400,8 +399,9 @@ class FlexScheduler : public BasicDispatchScheduler<FlexTask> {
 // Initializes the task allocator and the Flex scheduler.
 std::unique_ptr<FlexScheduler> SingleThreadFlexScheduler(
     Enclave* enclave, CpuList cpus, int32_t global_cpu,
-    absl::Duration empty_time_slice,
-    absl::Duration preemption_time_slice);
+    absl::Duration add_core_limitation,
+    absl::Duration free_core_limitation,
+    absl::Duration free_core_frequency_limitation);
 
 // Operates as the Global or Satellite agent depending on input from the
 // global_scheduler->GetGlobalCPU callback.
@@ -425,8 +425,9 @@ class FlexConfig : public AgentConfig {
 
   Cpu global_cpu_{Cpu::UninitializedType::kUninitialized};
 
-  absl::Duration empty_time_slice_;
-  absl::Duration preemption_time_slice_;
+  absl::Duration add_core_limitation_;
+  absl::Duration free_core_limitation_;
+  absl::Duration free_core_frequency_limitation_;
 };
 
 // An global agent scheduler.  It runs a single-threaded Flex scheduler on
@@ -438,7 +439,8 @@ class FullFlexAgent : public FullAgent<ENCLAVE> {
       : FullAgent<ENCLAVE>(config) {
     global_scheduler_ = SingleThreadFlexScheduler(
         &this->enclave_, *this->enclave_.cpus(), config.global_cpu_.id(),
-        config.empty_time_slice_, config.preemption_time_slice_);
+        config.add_core_limitation_, config.free_core_limitation_,
+        config.free_core_frequency_limitation_);
     this->StartAgentTasks();
     this->enclave_.Ready();
   }
