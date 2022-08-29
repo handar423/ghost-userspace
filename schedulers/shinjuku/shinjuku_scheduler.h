@@ -207,7 +207,7 @@ class ShinjukuScheduler : public BasicDispatchScheduler<ShinjukuTask> {
   // global agent's CPU, the global agent calls this function to try to pick a
   // new CPU to move to and, if a new CPU is found, to initiate the handoff
   // process.
-  void PickNextGlobalCPU(StatusWord::BarrierToken agent_barrier);
+  bool PickNextGlobalCPU(StatusWord::BarrierToken agent_barrier);
 
   // Print debug details about the current tasks managed by the global agent,
   // CPU state, and runqueue stats.

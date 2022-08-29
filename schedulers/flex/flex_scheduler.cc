@@ -543,7 +543,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
   if(unlikely(task->sp == nullptr && (sp->GetQoS() & VRAN_ID_MASK))) {
     uint32_t vran_id = (sp->GetQoS() & VRAN_ID_MASK) >> VRAN_INDEX_OFFSET;
     VranInfo& vran = vrans_[vran_id];
-    fprintf(stderr, "find new vran %d task\n", vran_id);
     if(vran.available == false){
       vran.available = true;
       vran.max_cpu_number_ = 1;
@@ -569,7 +568,6 @@ void FlexScheduler::SchedParamsCallback(FlexOrchestrator& orch,
     }
 
     task->vran_id = vran_id;
-    fprintf(stderr, "have find %d vran %d task\n", vran.max_cpu_number_, vran_id);
 
   }
   task->sp = sp;
@@ -690,7 +688,9 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     for (const Cpu& cpu : vran.cpu_assigns_) {
       CpuState* cs = cpu_state(cpu);
       if (cs->current) {
-        continue;
+        if(cs->current->vran_id){
+          continue;
+        }
       }
 
       vRAN_id_t vran_id = i << VRAN_INDEX_OFFSET;
@@ -713,6 +713,12 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
 
     FlexTask* to_run = Dequeue(0);
+    while (to_run && to_run->status_word.on_cpu())
+    {
+      Yield(to_run);
+      to_run = Dequeue(0);
+    }
+    
     if(!to_run){
       break;
     }
@@ -750,6 +756,13 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     RunRequest* req = enclave()->GetRunRequest(cpu);
     DCHECK(req->committed());
     if (req->state() == GHOST_TXN_COMPLETE) {
+      if (cs->current) {
+        FlexTask* prev = cs->current;
+        CHECK(prev->oncpu());
+
+        // Enqueue the preempted task so it is eligible to be picked again.
+        Enqueue(prev);
+      }
       // FlexTask latched successfully; clear state from an earlier run.
       //
       // Note that 'preempted' influences a task's run_queue position
@@ -765,6 +778,14 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
   }
 
+  if (!yielding_tasks_.empty()) {
+    for (FlexTask* t : yielding_tasks_) {
+      CHECK_EQ(t->run_state, FlexTask::RunState::kYielding);
+      Enqueue(t);
+    }
+    yielding_tasks_.clear();
+  }
+
   last_schedule = now;
 }
 
@@ -774,27 +795,21 @@ bool FlexScheduler::PickNextGlobalCPU(
   if(batch_app_assigned_cpu_.Empty()) return false;
       
   // TODO: Select CPUs more intelligently.
-  Cpu target_cpu = batch_app_assigned_cpu_.Front();
-  CpuState* cs = cpu_state(target_cpu);
-  FlexTask* prev = cs->current;
+  for(auto target_cpu : batch_app_assigned_cpu_){
+    CpuState* cs = cpu_state(target_cpu);
+    FlexTask* prev = cs->current;
 
-  if (prev) {
-    CHECK(prev->oncpu());
-    // Vacate CPU for running Global agent.
-    UnscheduleTask(prev);
-
-    // Set 'prio_boost' to make it reschedule asap in case 'prev' is
-    // holding a critical resource (prio_boost also means we can get
-    // away with not updating the task's runtime or sched_deadline).
-    prev->prio_boost = true;
-    Enqueue(prev);
+    if (prev) {
+      continue;
+    }
+    batch_app_assigned_cpu_.Set(global_cpu_);
+    batch_app_assigned_cpu_.Clear(target_cpu);
+    SetGlobalCPU(target_cpu);
+    enclave()->GetAgent(target_cpu)->Ping();
+    return true;
   }
-  batch_app_assigned_cpu_.Set(global_cpu_);
-  batch_app_assigned_cpu_.Clear(target_cpu);
-  SetGlobalCPU(target_cpu);
-  enclave()->GetAgent(target_cpu)->Ping();
 
-  return true;
+  return false;
 }
 
 std::unique_ptr<FlexScheduler> SingleThreadFlexScheduler(

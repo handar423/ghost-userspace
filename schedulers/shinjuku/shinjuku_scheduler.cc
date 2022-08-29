@@ -30,6 +30,9 @@ void ShinjukuTask::SetRuntime(absl::Duration new_runtime,
   runtime = new_runtime;
 }
 
+static uint32_t vran_sum_number = 0;
+static uint32_t scheduling_time = 0;
+
 void ShinjukuTask::UpdateRuntime() {
   // We read the runtime from the status word rather than make a syscall. The
   // runtime in the status word may be out-of-sync with the true runtime by up
@@ -94,19 +97,22 @@ void ShinjukuScheduler::DumpState(const Cpu& agent_cpu, int flags) {
     return;
   }
 
-  fprintf(stderr, "SchedState: ");
-  for (const Cpu& cpu : cpus()) {
-    CpuState* cs = cpu_state(cpu);
-    fprintf(stderr, "%d:", cpu.id());
-    if (!cs->current) {
-      fprintf(stderr, "none ");
-    } else {
-      Gtid gtid = cs->current->gtid;
-      absl::FPrintF(stderr, "%s ", gtid.describe());
-    }
-  }
-  fprintf(stderr, " rq_l=%ld", RunqueueSize());
-  fprintf(stderr, "\n");
+  // fprintf(stderr, "SchedState: ");
+  // for (const Cpu& cpu : cpus()) {
+  //   CpuState* cs = cpu_state(cpu);
+  //   fprintf(stderr, "%d:", cpu.id());
+  //   if (!cs->current) {
+  //     fprintf(stderr, "none ");
+  //   } else {
+  //     Gtid gtid = cs->current->gtid;
+  //     absl::FPrintF(stderr, "%s ", gtid.describe());
+  //   }
+  // }
+  // fprintf(stderr, " rq_l=%ld", RunqueueSize());
+
+  fprintf(stderr, "CPU=%f\n", vran_sum_number * 100.0 / scheduling_time);
+  scheduling_time = 0;
+  vran_sum_number = 0;
 }
 
 ShinjukuScheduler::CpuState* ShinjukuScheduler::cpu_state_of(
@@ -605,6 +611,7 @@ bool ShinjukuScheduler::SkipForSchedule(int iteration, const Cpu& cpu) {
 
 void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
                                        StatusWord::BarrierToken agent_sw_last) {
+  ++scheduling_time;
   // List of CPUs with open transactions.
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
@@ -827,9 +834,15 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
       it++;
     }
   }
+
+  for (const Cpu& cpu : cpus()) {
+    CpuState* cs = cpu_state(cpu);
+    if(cs->current)
+      ++vran_sum_number;
+  }
 }
 
-void ShinjukuScheduler::PickNextGlobalCPU(
+bool ShinjukuScheduler::PickNextGlobalCPU(
     StatusWord::BarrierToken agent_barrier) {
   // TODO: Select CPUs more intelligently.
   for (const Cpu& cpu : cpus()) {
@@ -838,22 +851,15 @@ void ShinjukuScheduler::PickNextGlobalCPU(
       ShinjukuTask* prev = cs->current;
 
       if (prev) {
-        CHECK(prev->oncpu());
-        // Vacate CPU for running Global agent.
-        UnscheduleTask(prev);
-
-        // Set 'prio_boost' to make it reschedule asap in case 'prev' is
-        // holding a critical resource (prio_boost also means we can get
-        // away with not updating the task's runtime or sched_deadline).
-        prev->prio_boost = true;
-        Enqueue(prev);
+        continue;
       }
 
       SetGlobalCPU(cpu);
       enclave()->GetAgent(cpu)->Ping();
-      break;
+      return true;
     }
   }
+  return false;
 }
 
 std::unique_ptr<ShinjukuScheduler> SingleThreadShinjukuScheduler(
@@ -895,8 +901,7 @@ void ShinjukuAgent::AgentThread() {
       }
       req->LocalYield(agent_barrier, /*flags=*/0);
     } else {
-      if (boosted_priority()) {
-        global_scheduler_->PickNextGlobalCPU(agent_barrier);
+      if (boosted_priority() && global_scheduler_->PickNextGlobalCPU(agent_barrier)) {
         continue;
       }
 
@@ -923,7 +928,7 @@ void ShinjukuAgent::AgentThread() {
           global_scheduler_->debug_runqueue_ = false;
           global_scheduler_->DumpState(cpu(), Scheduler::kDumpAllTasks);
         } else {
-          global_scheduler_->DumpState(cpu(), flags);
+          global_scheduler_->DumpState(cpu(), Scheduler::kDumpStateEmptyRQ);
         }
       }
     }
