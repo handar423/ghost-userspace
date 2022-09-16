@@ -158,18 +158,18 @@ void FlexScheduler::DumpState(const Cpu& agent_cpu, int flags) {
   //     }
   //   }
   // }
-  // fprintf(stderr, " rq_l_0=%ld", RunqueueSize(0));
+  // fprintf(stderr, "rq_l_0=%ld\n", RunqueueSize(0));
   for(int i = 0; i < MAX_VRAN_NUMBER; ++i){
     if (vrans_[i].available)
       fprintf(stderr, "CPU_%u=%f ", i, vran_sum_number[i] * 100.0 / scheduling_time);
   }
 
-  fprintf(stderr, "\n");
+  fprintf(stderr, " rq_l_0=%ld\n", RunqueueSize(0));
   
   // 上次开始的scheduling time
   int64_t time_spend = (time_temp - scheduling_time_from_last) / absl::Microseconds(1);
   
-  fprintf(stderr, "single scheduling time in us: %.3lf\navg yield in us:%.3lf \n", 
+  fprintf(stderr, "single scheduling time in us: %.3lf  avg yield in us:%.3lf \n", 
           time_spend * 1.0 / scheduling_time, 
           (time_spend * 1.0 / yield_time));
 
