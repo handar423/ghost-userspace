@@ -16,6 +16,7 @@
 // #include <ctime>
 // using namespace std::chrono;
 #include "schedulers/shinjuku/shinjuku_scheduler.h"
+#include <stdio.h>
 
 #include "absl/strings/str_format.h"
 
@@ -615,6 +616,7 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
   // List of CPUs with open transactions.
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   const absl::Time now = absl::Now();
+  static FILE* file = fopen("/home/Flexran_all/flexran_log_iso.log", "w");
   // TODO: Refactor this loop
   for (int i = 0; i < 2; i++) {
     CpuList updated_cpus = MachineTopology()->EmptyCpuList();
@@ -835,11 +837,14 @@ void ShinjukuScheduler::GlobalSchedule(const StatusWord& agent_sw,
     }
   }
 
+  int temp_vran_sum_number = 0;
   for (const Cpu& cpu : cpus()) {
     CpuState* cs = cpu_state(cpu);
     if(cs->current)
-      ++vran_sum_number;
+      ++temp_vran_sum_number;
   }
+  vran_sum_number += temp_vran_sum_number;
+  fprintf(file, "%d\n", temp_vran_sum_number);
 }
 
 bool ShinjukuScheduler::PickNextGlobalCPU(

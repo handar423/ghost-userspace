@@ -49,7 +49,7 @@ void Ghost_Status::global_init(){
     wc.period = 0;
     ghost_.SetWorkClass(qos / 16, wc);
     have_global_init = 1;
-    printf("global_init finished\n");
+    fprintf(stderr, "global_init finished\n");
 }
 
 void Ghost_Status::thread_init(int sid){

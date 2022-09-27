@@ -65,7 +65,7 @@ class GhostOrchestrator final : public Orchestrator {
   void InitThreadPool();
 
   // Initializes the ghOSt PrioTable.
-  void InitGhost();
+  // void InitGhost();
 
   // The load generator calls this method to populate 'idle_sids_' with a list
   // of the SIDs of idle workers. Note that this method clears 'idle_sids_'

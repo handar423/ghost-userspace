@@ -39,37 +39,37 @@ void GhostOrchestrator::InitThreadPool() {
   thread_pool().Init(kernel_schedulers, thread_work);
 }
 
-void GhostOrchestrator::InitGhost() {
-  const std::vector<ghost::Gtid> gtids = thread_pool().GetGtids();
-  // Add 1 to account for the load generator thread.
-  CHECK_EQ(gtids.size(), total_threads());
+// void GhostOrchestrator::InitGhost() {
+//   const std::vector<ghost::Gtid> gtids = thread_pool().GetGtids();
+//   // Add 1 to account for the load generator thread.
+//   CHECK_EQ(gtids.size(), total_threads());
 
-  ghost::work_class wc;
-  ghost_.GetWorkClass(kWorkClassIdentifier, wc);
-  wc.id = kWorkClassIdentifier;
-  wc.flags = WORK_CLASS_ONESHOT;
-  wc.qos = options().ghost_qos;
-  // Write '100' in for the deadline just in case we want to run the experiments
-  // with the ghOSt EDF (Earliest-Deadline-First) scheduler.
-  wc.exectime = 100;
-  // 'period' is irrelevant because all threads scheduled by ghOSt are
-  // one-shots.
-  wc.period = 0;
-  ghost_.SetWorkClass(kWorkClassIdentifier, wc);
+//   ghost::work_class wc;
+//   ghost_.GetWorkClass(kWorkClassIdentifier, wc);
+//   wc.id = kWorkClassIdentifier;
+//   wc.flags = WORK_CLASS_ONESHOT;
+//   wc.qos = options().ghost_qos;
+//   // Write '100' in for the deadline just in case we want to run the experiments
+//   // with the ghOSt EDF (Earliest-Deadline-First) scheduler.
+//   wc.exectime = 100;
+//   // 'period' is irrelevant because all threads scheduled by ghOSt are
+//   // one-shots.
+//   wc.period = 0;
+//   ghost_.SetWorkClass(kWorkClassIdentifier, wc);
 
-  // Start at index 1 because the first thread is the load generator (SID 0),
-  // which is scheduled by CFS (Linux Completely Fair Scheduler).
-  for (size_t i = 0; i < total_threads(); ++i) {
-    ghost::sched_item si;
-    ghost_.GetSchedItem(/*sid=*/i, si);
-    si.sid = i;
-    si.wcid = kWorkClassIdentifier;
-    si.gpid = gtids[i].id();
-    si.flags |= SCHED_ITEM_RUNNABLE;
-    si.deadline = 0;
-    ghost_.SetSchedItem(/*sid=*/i, si);
-  }
-}
+//   // Start at index 1 because the first thread is the load generator (SID 0),
+//   // which is scheduled by CFS (Linux Completely Fair Scheduler).
+//   for (size_t i = 0; i < total_threads(); ++i) {
+//     ghost::sched_item si;
+//     ghost_.GetSchedItem(/*sid=*/i, si);
+//     si.sid = i;
+//     si.wcid = kWorkClassIdentifier;
+//     si.gpid = gtids[i].id();
+//     si.flags |= SCHED_ITEM_RUNNABLE;
+//     si.deadline = 0;
+//     ghost_.SetSchedItem(/*sid=*/i, si);
+//   }
+// }
 
 GhostOrchestrator::GhostOrchestrator(Orchestrator::Options opts)
     // Add 1 to account for the load generator.
@@ -88,7 +88,7 @@ GhostOrchestrator::GhostOrchestrator(Orchestrator::Options opts)
   // This must be called after 'InitThreadPool' since it accesses the GTIDs of
   // the threads in the thread pool.
   printf("InitGhost\n");
-  InitGhost();
+  // InitGhost();
 
   printf("threads_ready_\n");
   threads_ready_.Notify();

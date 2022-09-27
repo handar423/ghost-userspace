@@ -24,7 +24,7 @@
 #include "experiments/rocksdb_single/latency.h"
 #include "experiments/rocksdb_single/request.h"
 #include "experiments/shared/cfs.h"
-#include "experiments/shared/thread_pool.h"
+#include "experiments/rocksdb_single/thread_pool.h"
 
 namespace ghost_test {
 

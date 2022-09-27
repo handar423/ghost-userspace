@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "schedulers/flex/flex_scheduler.h"
+#include "stdio.h"
 
 #include "absl/strings/str_format.h"
 
@@ -637,6 +638,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
   CpuList open_cpus = MachineTopology()->EmptyCpuList();
   static absl::Time last_schedule = absl::Now();
   const absl::Time now = absl::Now();
+  static FILE* file = fopen("/home/Flexran_all/flexran_log.log", "w");
 
   // 重新分配CPU
   for (int i_outer = 0; i_outer < MAX_VRAN_NUMBER; ++i_outer) {
@@ -683,6 +685,7 @@ void FlexScheduler::GlobalSchedule(const StatusWord& agent_sw,
       }
     }
     vran_sum_number[i] += vran.cpu_assigns_.Size();
+    fprintf(file, "%d\n", vran.cpu_assigns_.Size());
 
     // TODO: Refactor this loop
     for (const Cpu& cpu : vran.cpu_assigns_) {

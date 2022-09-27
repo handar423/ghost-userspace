@@ -18,6 +18,9 @@
 #include <map>
 #include <time.h>
 #include <semaphore.h>
+#include <sys/prctl.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
 
 namespace ghost_test {
 
@@ -386,27 +389,34 @@ void Orchestrator::LoadGenerator(uint32_t sid) {
 }
 
 void Orchestrator::Worker(uint32_t sid) {
+  char thread_name[20] = "bbupool_rt_0";
+  prctl(PR_SET_NAME, thread_name);
   if (!first_run().Triggered(sid)) {
     CHECK(first_run().Trigger(sid));
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    for (const auto cpu : options_.worker_cpus) {
+      CPU_SET(cpu, &mask);
+    }
+    pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
     printf("Worker (SID %u, TID: %ld, not affined to any CPU)\n", sid,
            syscall(SYS_gettid));
   }
 
   Request request;
-  queue_mutex.lock();
+  // queue_mutex.lock();
   if (network().Poll(request)) {
     request.request_assigned = absl::Now();
   } else {
-    // No more requests waiting in the ingress queue
-    // printf("no more work in network");
-    queue_mutex.unlock();
-
-    // hijack point
-    sem_wait(NULL);
+    // No more requests waiting in the ingress queue, so give the
+    // requests we have so far to the worker.
+    // queue_mutex.unlock();
+    // fprintf(stderr, "empty loop\n");
+    // sched_yield();
     return;
   }
-  queue_mutex.unlock();
-  request.request_assigned = request.request_start = absl::Now();
+  // queue_mutex.unlock();
+  request.request_start = request.request_assigned = absl::Now();
   HandleRequest(request, gen()[sid]);
   request.request_finished = absl::Now();
   requests()[sid].push_back(request);

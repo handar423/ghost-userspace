@@ -990,6 +990,87 @@ cc_binary(
 )
 
 cc_binary(
+    name = "libShinjukuHijack.so", #mylib是头文件的名字
+    srcs = [
+        "experiments/hijack/ghost_status.h",
+        "experiments/hijack/ghost_status.cc",
+        "experiments/hijack/pthread_setscheduparam.cc",
+        "experiments/hijack/pthread_setscheduparam.h",
+        "experiments/hijack/pthread_setaffinity_np.cc",
+        "experiments/hijack/pthread_setaffinity_np.h",
+    ],
+    deps = [
+        ":base",
+        ":experiments_shared",
+        ":ghost",
+        "@com_google_absl//absl/time",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    linkopts = [
+        "-lstdc++",
+        "-ldl",
+        "-fPIC",
+        "-shared", #链接时候的命令
+    ],
+    linkshared = True,
+    linkstatic = True,
+)
+
+
+cc_binary(
+    name = "libNginxHijack.so", #mylib是头文件的名字
+    srcs = [
+        "experiments/hijack/ghost_status.h",
+        "experiments/hijack/ghost_status.cc",
+        "experiments/hijack/sched_setaffinity.cc",
+        "experiments/hijack/sched_setaffinity.h",
+    ],
+    deps = [
+        ":base",
+        ":experiments_shared",
+        ":ghost",
+        "@com_google_absl//absl/time",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    linkopts = [
+        "-lstdc++",
+        "-ldl",
+        "-fPIC",
+        "-shared", #链接时候的命令
+    ],
+    linkshared = True,
+    linkstatic = True,
+)
+
+cc_binary(
+    name = "libLinuxHijack.so", #mylib是头文件的名字
+    srcs = [
+        "experiments/hijack/ghost_status.h",
+        "experiments/hijack/ghost_status.cc",
+        "experiments/hijack/pthread_setscheduparam.cc",
+        "experiments/hijack/pthread_setscheduparam.h",
+    ],
+    deps = [
+        ":base",
+        ":experiments_shared",
+        ":ghost",
+        "@com_google_absl//absl/time",
+    ],
+    copts = compiler_flags,
+    visibility = ["//experiments/scripts:__pkg__"],
+    linkopts = [
+        "-lstdc++",
+        "-ldl",
+        "-fPIC",
+        "-shared", #链接时候的命令
+    ],
+    linkshared = True,
+    linkstatic = True,
+)
+
+cc_binary(
     name = "rocksdb_single",
     srcs = [
         "experiments/rocksdb_single/cfs_orchestrator.cc",
@@ -1007,6 +1088,7 @@ cc_binary(
         "experiments/rocksdb_single/orchestrator.cc",
         "experiments/rocksdb_single/orchestrator.h",
         "experiments/rocksdb_single/request.h",
+        "experiments/rocksdb_single/thread_pool.h",
     ],
     copts = compiler_flags,
     visibility = ["//experiments/scripts:__pkg__"],
